@@ -1,0 +1,269 @@
+---
+title: "LightGBM"
+output: html_notebook
+---
+
+In this notebook we create a LightGBM model to forecast the daily sales for the next 28 days.
+```{r}
+library(data.table)
+library(Matrix)
+library(dplyr)
+library(MLmetrics)
+library(lightgbm)
+library(stringr)
+```
+
+Load Data:
+```{r}
+set.seed(257)
+DATA_DIR <- "/Users/christosgeorghiou/Documents/GitHub/AFCS-M5-Walmart-Sales-Forecasting/data"
+
+PATH_CAL <- file.path(DATA_DIR, "calendar_afcs2025.csv")
+PATH_PRICES <- file.path(DATA_DIR, "sell_prices_afcs2025.csv")
+PATH_TRAIN <- file.path(DATA_DIR, "sales_train_validation_afcs2025.csv")
+PATH_TEST  <- file.path(DATA_DIR, "sales_test_validation_afcs2025.csv")
+PATH_SUB   <- file.path(DATA_DIR, "sample_submission_afcs2025.csv")
+
+cal <- fread(PATH_CAL)
+prices <- fread(PATH_PRICES)
+train_wide <- fread(PATH_TRAIN)
+test_wide  <- fread(PATH_TEST)
+sub <- fread(PATH_SUB)
+
+names(cal)
+
+```
+
+Pre-processing:
+```{r}
+d_cols <- grep("^d_", names(train_wide), value = TRUE)
+
+train_long <- melt(
+  train_wide,
+  id.vars = "id",
+  measure.vars = d_cols,
+  variable.name = "d",
+  value.name = "sales"
+)
+```
+
+```{r}
+calendar <- readr::read_csv(PATH_CAL) %>%
+  mutate(
+    d = paste0("d_", row_number()),
+    date_col = mdy(date)
+  ) %>%
+  select(
+    d, date_col, wm_yr_wk, wday, weekday, month, year,
+    event_name_1, event_name_2, snap_TX
+  )
+
+
+
+```
+```{r}
+train_long <- train_long %>% select(-any_of("date"))
+
+
+train_long <- train_long %>%
+  left_join(calendar, by = "d") %>%
+  rename(date = date_col) %>%
+  arrange(id, date)
+
+
+```
+
+```{r}
+names(train_long)
+sum(duplicated(names(train_long)))
+
+```
+```{r}
+train_long <- train_long %>%
+  mutate(
+    store_id = str_extract(id, "TX_\\d"),
+    item_id  = str_extract(id, "FOODS_3_\\d{3}")
+  )
+
+```
+
+```{r}
+prices <- readr::read_csv(PATH_PRICES)
+
+train_long <- train_long %>%
+  left_join(prices, by = c("store_id", "item_id", "wm_yr_wk"))
+
+```
+```{r}
+summary(train_long$sell_price)
+
+```
+
+Forward-fill prices:
+```{r}
+dt <- as.data.table(train_long)
+setorder(dt, id, date)
+
+dt[, sell_price_ff := nafill(sell_price, type = "locf"), by = id]
+```
+
+```{r}
+dt[, .(na_rate = mean(is.na(sell_price))), by = id][order(-na_rate)][1:10]
+
+
+```
+Create lag & rolling features:
+```{r}
+# Lags
+for (L in c(1, 7, 14, 28)) {
+  dt[, paste0("lag_", L) := shift(sales, n = L, type = "lag"), by = id]
+}
+
+# Rolling statistics (past-only)
+dt[, roll_mean_7  := frollmean(sales, 7,  align = "right"), by = id]
+dt[, roll_mean_28 := frollmean(sales, 28, align = "right"), by = id]
+dt[, roll_sd_28   := frollapply(sales, 28, sd, align = "right"), by = id]
+
+# Intermittency
+dt[, nz_28 := frollsum(as.integer(sales > 0), 28, align = "right"), by = id]
+dt[, zero_ratio_28 := 1 - nz_28 / 28]
+
+```
+
+
+```{r}
+dt[, price_lag_7 := shift(sell_price_ff, 7), by = id]
+dt[, price_pct_change_7 :=
+      fifelse(price_lag_7 > 0,
+              (sell_price_ff - price_lag_7) / price_lag_7,
+              0.0)]
+dt[, is_price_drop := as.integer(price_pct_change_7 < 0)]
+
+dt[, price_mean_item := mean(sell_price_ff, na.rm = TRUE), by = id]
+dt[, price_rel := sell_price_ff / price_mean_item]
+
+```
+
+Time-based validation:
+```{r}
+max_date <- max(dt$date, na.rm = TRUE)
+val_start <- max_date - 27
+
+dt[, target_1 := shift(sales, 1, type = "lead"), by = id]
+
+train_1 <- dt[date < val_start & !is.na(target_1)]
+val_1   <- dt[date >= val_start & !is.na(target_1)]
+
+```
+
+```{r}
+# Recreate the splits from the cleaned dt
+max_date <- max(dt$date, na.rm = TRUE)
+val_start <- max_date - 27
+
+dt[, target_1 := shift(sales, 1, type = "lead"), by = id]
+
+train_1 <- dt[date < val_start & !is.na(target_1)]
+val_1   <- dt[date >= val_start & !is.na(target_1)]
+
+
+```
+
+Prepare features:
+
+* wday: Day of the week
+* month: Month
+* year: Year
+* snap_TX: Binary indicator for SNAP eligibility in Texas
+* lag_1: Sales from yesterday
+* lag_7: Sales from last week
+* lag_28: Sales from last month
+* roll_mean_7: Average sales over last 7 days
+* roll_mean_28: Average sales over last month
+* roll_sd_28: Standard deviation of sales over last month
+* zero_ratio_28: Fraction of zero-sales days in last 28 days (Distinguishes slow-moving items from consistently selling ones)
+* sell_price_ff: Current effective price
+* price_rel: Current price relative to item’s average price (Is the item expensive or discounted relative to itself)
+* price_pct_change_7: Percentage price change over the last 7 days
+* is_price_drop: Binary indicator of a recent price decrease.
+```{r}
+feat_cols <- c(
+  "wday","month","year","snap_TX",
+  "lag_1","lag_7","lag_14","lag_28",
+  "roll_mean_7","roll_mean_28","roll_sd_28","zero_ratio_28",
+  "sell_price_ff","price_rel","price_pct_change_7","is_price_drop"
+)
+
+
+missing_feats <- setdiff(feat_cols, names(dt))
+print(missing_feats)
+stopifnot(length(missing_feats) == 0)
+
+train_1 <- train_1[complete.cases(train_1[, ..feat_cols])]
+val_1   <- val_1[complete.cases(val_1[, ..feat_cols])]
+
+```
+
+```{r}
+y_tr <- log1p(train_1$target_1)
+y_va <- log1p(val_1$target_1)
+
+X_tr <- as.matrix(train_1[, ..feat_cols])
+X_va <- as.matrix(val_1[, ..feat_cols])
+
+```
+
+
+```{r}
+library(lightgbm)
+
+dtrain <- lgb.Dataset(X_tr, label = y_tr)
+dval   <- lgb.Dataset(X_va, label = y_va)
+
+params <- list(
+  objective = "regression",
+  metric = "rmse",
+  learning_rate = 0.05,
+  num_leaves = 64,
+  feature_fraction = 0.8,
+  bagging_fraction = 0.8,
+  bagging_freq = 1,
+  min_data_in_leaf = 50
+)
+
+m1 <- lgb.train(
+  params = params,
+  data = dtrain,
+  nrounds = 5000,
+  valids = list(val = dval),
+  early_stopping_rounds = 100,
+  verbose = 1
+)
+
+```
+
+
+Evaluate:
+```{r}
+pred <- expm1(predict(m1, X_va))
+rmse <- sqrt(mean((val_1$target_1 - pred)^2))
+rmse
+
+```
+Naive:
+```{r}
+val_naive <- dt[date >= val_start]
+val_naive[, naive := shift(sales, 1, type="lag"), by=id]
+rmse_naive <- sqrt(mean((val_naive$target_1 - val_naive$naive)^2, na.rm = TRUE))
+rmse_naive
+
+```
+Seasonal Naive:
+```{r}
+val_snaive <- dt[date >= val_start]
+val_snaive[, snaive := shift(sales, 7, type="lag"), by=id]
+rmse_snaive <- sqrt(mean((val_snaive$target_1 - val_snaive$snaive)^2, na.rm = TRUE))
+rmse_snaive
+
+```
+
