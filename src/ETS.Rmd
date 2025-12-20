@@ -1,0 +1,69 @@
+---
+title: "ETS model"
+output: html_notebook
+---
+
+
+```{r}
+library(dplyr)
+library(lubridate)
+library(tsibble)
+library(fable)
+library(feasts)
+library(tidyr)
+library(readr)
+```
+
+
+```{r}
+df <- as.data.frame(dt) %>%
+  transmute(
+    id = as.character(id),
+    date = as.Date(date),
+    sales = as.numeric(sales)
+  ) %>% 
+  arrange(id, date)
+
+
+
+sales_ts <- df %>%
+  as_tsibble(key = id, index = date)
+
+max_date  <- max(sales_ts$date, na.rm = TRUE)
+val_start <- max_date - 27
+
+train_ts <- sales_ts %>% filter(date < val_start)
+val_ts   <- sales_ts %>% filter(date >= val_start)
+```
+```{r}
+class(dt)
+
+```
+
+
+Fit ETS model:
+```{r}
+fit_ets <- train_ts %>%
+  model(ETS = ETS(sales))
+
+```
+```{r}
+fc_ets <- fit_ets %>%
+  forecast(h = "28 days") %>%
+  as_tibble() %>%
+  select(id, date, .mean)
+```
+
+
+Score ETS model on validation:
+```{r}
+scored_ets <- val_ts %>%
+  as_tibble() %>%
+  select(id, date, sales) %>%
+  left_join(fc_ets, by = c("id","date"))
+
+rmse_ets <- sqrt(mean((scored_ets$sales - scored_ets$.mean)^2, na.rm = TRUE))
+rmse_ets
+
+```
+
