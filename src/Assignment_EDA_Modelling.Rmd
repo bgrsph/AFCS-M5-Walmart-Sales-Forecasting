@@ -54,9 +54,9 @@ library(feasts)
 #### Load the Data
 
 ```{r}
-calendar <- read_csv("data/calendar_afcs2025.csv")  # date, event_type, week_id
-sell_prices <- read_csv("data/sell_prices_afcs2025.csv")  # week_id, item_id, price
-sales_data  <- read_csv("data/sales_train_validation_afcs2025.csv")  # item_id, product_type, items_sold
+calendar <- read_csv("../data/calendar_afcs2025.csv")  # date, event_type, week_id
+sell_prices <- read_csv("../data/sell_prices_afcs2025.csv")  # week_id, item_id, price
+sales_data  <- read_csv("../data/sales_train_validation_afcs2025.csv")  # item_id, product_type, items_sold
      
 ```
 
