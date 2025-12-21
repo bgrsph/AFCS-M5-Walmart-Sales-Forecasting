@@ -591,7 +591,7 @@ autoplot(ts_train, sales) +
 ```{r}
 fit_arima |>
   gg_tsresiduals()
-=======
+
 arima_resid <- fit_arima %>%
   augment()
 # Residual Time Plot
@@ -623,8 +623,9 @@ arima_resid %>%
   geom_histogram(bins = 30, fill = "gray", color = "black") +
   labs(title = "Histogram of ARIMA Residuals",
        x = "Residual", y = "Count")
->>>>>>> f3862a146cdbdd93da182d02634da7f2f6a602a2
+
 ```
+
 ```{r}
 arima_resid <- fit_arima %>%
   augment()
@@ -879,6 +880,8 @@ accuracy_lgbm
 
 ### 3. Evaluate residuals
 ```{r}
+
+library(patchwork)
 
 # get predictions for train data
 fitted_train_values <- expm1(predict(m1, X_tr))
