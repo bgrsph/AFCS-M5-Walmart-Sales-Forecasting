@@ -1016,7 +1016,7 @@ Read identified tuned hyperparemeters
 
 ```{r}
 best_param_df <- read.csv("best_lightgbm_params.csv", stringsAsFactors = FALSE)
-best_param_df
+best_param_df <- as.list(best_param_df[1, ])
 
 ```
 
