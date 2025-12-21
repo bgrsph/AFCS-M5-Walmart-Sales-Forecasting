@@ -1,0 +1,2 @@
+"objective","metric","learning_rate","num_leaves","feature_fraction","bagging_fraction","min_data_in_leaf"
+"regression","rmse",0.05,64,0.9,0.9,20

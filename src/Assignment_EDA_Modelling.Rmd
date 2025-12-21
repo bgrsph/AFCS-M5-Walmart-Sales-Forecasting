@@ -141,7 +141,7 @@ Calendar contains columns:
     TX, allow SNAP3 purchases on the examined date. 1 indicates that
     SNAP purchases are allowed.
 
-The dataset covers the perido from 29/01/2011 to 19/06/2011. There are
+The dataset covers the period from 29/01/2011 to 19/06/2011. There are
 1807 NA values in the event_type_1 columns and 1964 NA values in the
 event_type_2 column, indicating that there were no events on the
 corresponding dates.
@@ -551,7 +551,8 @@ models <- ts_train %>%
 fc_baseline <- models %>% forecast(h = forecast_horizon, level = c(80, 95))
 
 # Calculate accuracy for the validation predictions
-accuracy(fc_baseline, ts_validation)
+accuracy_baseline <- accuracy(fc_baseline, ts_validation)
+accuracy_baseline
 
 # Plot the data and predictions
 autoplot(ts_train, sales) +
@@ -562,7 +563,26 @@ autoplot(ts_train, sales) +
 ### 5. Diagnostics (if needed but I don't think so since these are baselines)
 
 ```{r}
-# TODO maybe. 
+
+models |>
+  select(Mean) |>
+  gg_tsresiduals() +
+  labs(title = "Residual diagnostics: Mean")
+
+models |>
+  select(Naive) |>
+  gg_tsresiduals() +
+  labs(title = "Residual diagnostics: Naive")
+
+models |>
+  select(Seasonal_naive) |>
+  gg_tsresiduals() +
+  labs(title = "Residual diagnostics: Seasonal naive")
+
+models |>
+  select(Drift) |>
+  gg_tsresiduals() +
+  labs(title = "Residual diagnostics: Drift")
 ```
 
 ## ARIMA
@@ -605,7 +625,8 @@ fc_arima <- fit_arima %>%
 
 
 # Calculate accuracy for the validation predictions
-accuracy(fc_arima, ts_validation)
+accuracy_arima <- accuracy(fc_arima, ts_validation)
+accuracy_arima
 
 # Plot the predictions
 autoplot(ts_train, sales) +
@@ -616,5 +637,518 @@ autoplot(ts_train, sales) +
 ### 4. Residual Diagnostics
 
 ```{r}
-# TODO
+fit_arima |>
+  gg_tsresiduals()
 ```
+```{r}
+arima_resid <- fit_arima %>%
+  augment()
+# Residual Time Plot
+arima_resid %>%
+  ggplot(aes(x = date, y = .resid)) +
+  geom_line() +
+  geom_hline(yintercept = 0, color = "red") +
+  labs(title = "ARIMA Residuals Over Time",
+       x = "Date", y = "Residual")
+
+# Residual ACF
+arima_resid %>%
+  ACF(.resid) %>%
+  autoplot() +
+  labs(title = "ACF of ARIMA Residuals")
+
+# Residual PACF
+arima_resid %>%
+  PACF(.resid) %>%
+  autoplot() +
+  labs(title = "PACF of ARIMA Residuals")
+
+# Ljung - Box
+arima_resid %>%
+  features(.resid, ljung_box, lag = 28, dof = 0)
+# Histogram
+arima_resid %>%
+  ggplot(aes(x = .resid)) +
+  geom_histogram(bins = 30, fill = "gray", color = "black") +
+  labs(title = "Histogram of ARIMA Residuals",
+       x = "Residual", y = "Count")
+```
+
+## ETS model
+
+### 1. Pre-processing
+
+No prepcoessing to the data is necessary compared to previous models
+
+### 1. Fit the model
+```{r}
+fit_ets <- ts_train %>%
+model(ETS = ETS(sales))
+
+report(fit_ets)
+
+```
+
+
+### 2. Generate and plot the predictions
+
+
+```{r}
+# generate the predcitions
+fc_ets <- fit_ets %>%
+forecast(h = forecast_horizon, level = c(80, 95))
+
+# plot the predictions
+autoplot(ts_train, sales) +
+autolayer(fc_ets) +
+labs(title = "ETS Forecast (28 days)", x = "Date", y = "Sales")
+
+# get the accuracy
+accuracy_ets <- accuracy(fc_ets, ts_validation)
+accuracy_ets
+```
+
+
+### 3. Resdual diagnostics
+
+```{r}
+fit_ets |>
+  gg_tsresiduals()
+```
+
+
+## LightGBM model
+
+### 1. Pre-processsing
+
+In order to create features for light gbm model - we need to prepare full_dataset to handle the feature enginerreing from 'LightGBM.Rmd' notebook
+
+```{r}
+library(dplyr)
+library(data.table)
+library(lightgbm)
+
+# parse full_dataset as table
+dt <- as.data.table(full_dataset)
+
+# rename units_sold to sales to match Chris' naming
+dt[, sales := as.numeric(units_sold)]
+# ensure date is in date format
+dt[, date := as.Date(date)]
+
+# create uniqe series id (one time series per item-store)
+dt[, id := paste(item_id, store_id, sep = "_")]
+
+# sort for correct lags/rolling
+setorder(dt, id, date)  # [web:307]
+
+# forward-fill prices within each series
+dt[, sell_price_ff := nafill(sell_price, type = "locf"), by = id]  # [web:410]
+
+# lags
+for (L in c(1, 7, 14, 28)) {
+  dt[, paste0("lag_", L) := shift(sales, n = L, type = "lag"), by = id]  # [web:137]
+}
+
+# rolling statistics
+dt[, roll_mean_7  := frollmean(sales, 7,  align = "right"), by = id]
+dt[, roll_mean_28 := frollmean(sales, 28, align = "right"), by = id]
+dt[, roll_sd_28   := frollapply(sales, 28, sd, align = "right"), by = id]
+
+# intermittency
+dt[, nz_28 := frollsum(as.integer(sales > 0), 28, align = "right"), by = id]
+dt[, zero_ratio_28 := 1 - nz_28 / 28]
+
+# price features
+dt[, price_lag_7 := shift(sell_price_ff, 7), by = id]
+dt[, price_pct_change_7 :=
+      fifelse(price_lag_7 > 0,
+              (sell_price_ff - price_lag_7) / price_lag_7,
+              0.0)]
+dt[, is_price_drop := as.integer(price_pct_change_7 < 0)]
+dt[, price_mean_item := mean(sell_price_ff, na.rm = TRUE), by = id]
+dt[, price_rel := sell_price_ff / price_mean_item]
+
+# time-validation
+max_date  <- max(dt$date, na.rm = TRUE)
+val_start <- max_date - 27
+
+# tomorrow target
+dt[, target_1 := shift(sales, 1, type = "lead"), by = id]  
+
+train_1 <- dt[date <  val_start & !is.na(target_1)]
+val_1   <- dt[date >= val_start & !is.na(target_1)]
+```
+
+
+Prepare features:
+
+* wday: Day of the week
+* month: Month
+* year: Year
+* snap_TX: Binary indicator for SNAP eligibility in Texas
+* lag_1: Sales from yesterday
+* lag_7: Sales from last week
+* lag_28: Sales from last month
+* roll_mean_7: Average sales over last 7 days
+* roll_mean_28: Average sales over last month
+* roll_sd_28: Standard deviation of sales over last month
+* zero_ratio_28: Fraction of zero-sales days in last 28 days (Distinguishes slow-moving items from consistently selling ones)
+* sell_price_ff: Current effective price
+* price_rel: Current price relative to item’s average price (Is the item expensive or discounted relative to itself)
+* price_pct_change_7: Percentage price change over the last 7 days
+* is_price_drop: Binary indicator of a recent price decrease.
+
+```{r}
+feat_cols <- c(
+  "wday","month","year","snap_TX",
+  "lag_1","lag_7","lag_14","lag_28",
+  "roll_mean_7","roll_mean_28","roll_sd_28","zero_ratio_28",
+  "sell_price_ff","price_rel","price_pct_change_7","is_price_drop"
+)
+
+
+missing_feats <- setdiff(feat_cols, names(dt))
+print(missing_feats)
+stopifnot(length(missing_feats) == 0)
+
+train_1 <- train_1[complete.cases(train_1[, ..feat_cols])]
+val_1   <- val_1[complete.cases(val_1[, ..feat_cols])]
+
+```
+
+```{r}
+y_tr <- log1p(train_1$target_1)
+y_va <- log1p(val_1$target_1)
+
+X_tr <- as.matrix(train_1[, ..feat_cols])
+X_va <- as.matrix(val_1[, ..feat_cols])
+
+```
+
+
+### 2. Fit the model
+
+```{r}
+
+dtrain <- lgb.Dataset(X_tr, label = y_tr)
+dval   <- lgb.Dataset(X_va, label = y_va)
+
+params <- list(
+  objective = "regression",
+  metric = "rmse",
+  learning_rate = 0.05,
+  num_leaves = 64,
+  feature_fraction = 0.8,
+  bagging_fraction = 0.8,
+  bagging_freq = 1,
+  min_data_in_leaf = 50
+)
+
+m1 <- lgb.train(
+  params = params,
+  data = dtrain,
+  nrounds = 5000,
+  valids = list(val = dval),
+  early_stopping_rounds = 100,
+  verbose = 1
+)
+
+```
+
+### 3. Validate the predictions
+
+```{r}
+# prediction for target values
+pred <- expm1(predict(m1, X_va))
+
+# factual target values
+y <- val_1$target_1
+
+# residuals
+e <- y - pred
+
+# calcualte accuracy metrics
+me_lgbm   <- mean(e, na.rm = TRUE)
+rmse_lgbm <- sqrt(mean(e^2, na.rm = TRUE))
+mae_lgbm  <- mean(abs(e), na.rm = TRUE)
+
+# calculate autocorrelation for lag 1
+acf1_lgbm <- as.numeric(stats::acf(e[is.finite(e)], plot = FALSE, lag.max = 1)$acf[2])  
+
+# parse metrics as table
+accuracy_lgbm <- data.frame(
+  .model = "LightGBM",
+  .type  = "Test",
+  ME = me_lgbm,
+  RMSE = rmse_lgbm,
+  MAE = mae_lgbm,
+  ACF1 = acf1_lgbm
+)
+
+# present metrics
+accuracy_lgbm
+
+
+```
+
+### 3. Evaluate residuals
+```{r}
+
+# get predictions for train data
+fitted_train_values <- expm1(predict(m1, X_tr))
+
+# actual data
+actual_train_values <- train_1$target_1  
+
+# calculate residuals
+train_residuals <- actual_train_values - fitted_train_values
+
+# attach residuals to the training table and shift to the day being predicted
+train_dt <- as.data.table(train_1)
+train_dt[, train_residual := train_residuals]
+
+# target_1 is sales on the next day, so residuals are date + 1
+train_dt[, predicted_date := date + 1L]
+
+# for each timestamp take an averagre of residuals 
+daily_train_residuals <- train_dt[
+  , .(average_residual = mean(train_residual, na.rm = TRUE)),
+  by = predicted_date
+]
+
+# save in the tsibble format to use acf and autplot
+daily_train_residual_ts <- as_tsibble(
+  daily_train_residuals,
+  index = predicted_date
+)
+
+# plot residuals over time
+p_time_tr <- autoplot(daily_train_residual_ts, average_residual) +
+  labs(
+    title = "LightGBM fit residuals",
+    x = "date",
+    y = "Innovation residuals"
+  )
+
+# plot autocorrelation 
+p_acf_tr <- daily_train_residual_ts |>
+  ACF(average_residual) |>
+  autoplot() +
+  labs(title = NULL, x = "lag [1D]", y = "acf")
+
+# plot histogram of residuals
+p_hist_tr <- ggplot(daily_train_residuals, aes(x = average_residual)) +
+  geom_histogram(bins = 50) +
+  geom_rug(sides = "b", alpha = 0.25) +
+  labs(title = NULL, x = ".resid", y = "count")
+
+# present plots
+p_time_tr / (p_acf_tr | p_hist_tr)
+
+```
+
+### 4. Tune hyperparameters
+
+```{r}
+# insipration for approach: https://github.com/microsoft/LightGBM/issues/4642
+
+dtrain <- lgb.Dataset(
+  data  = X_tr,
+  label = y_tr,
+  params = list(feature_pre_filter = FALSE)  # fixed here
+)
+
+# parameters that stay fixed
+base_params <- list(
+  objective = "regression",
+  metric    = "rmse"
+)
+
+# grid with different tuning parameters
+param_grid <- expand.grid(
+  learning_rate    = c(0.03, 0.05),
+  num_leaves       = c(15, 31, 64),
+  feature_fraction = c(0.7, 0.8, 0.9),
+  bagging_fraction = c(0.7, 0.8, 0.9),
+  min_data_in_leaf = c(10, 20, 50),
+  KEEP.OUT.ATTRS = FALSE
+)
+
+#.set seed for reproduction
+set.seed(123)
+
+```
+
+
+Run cross validation.
+Note: At the moment commented out for knitting efficiency. The output of the cross validaiton is saved in csv file and read in the code at the bottom of the next chunk.
+
+```{r} eval=FALSE
+# cv settings
+# for computing efficiency only 10 rounds of cross-validation are used per each parameter setting
+nrounds_cv      <- 100
+early_stopping  <- 10
+n_folds         <- 3
+
+# store rmse for each cross validation
+cv_scores <- numeric(nrow(param_grid))
+
+# loop over all hyperparameter combinations in the grid.
+for (i in seq_len(nrow(param_grid))) {
+  
+  # get the parameters
+  params_i <- c(base_params, as.list(param_grid[i, ]))
+  
+  # Run k-fold cross-validation for this parameter setting
+  cv <- lgb.cv(
+    params = params_i,
+    data   = dtrain,
+    nrounds = nrounds_cv,
+    nfold   = n_folds,
+    early_stopping_rounds = early_stopping,
+    verbose = -1
+  )
+  
+  # store the min RMSE value 
+  cv_scores[i] <- min(unlist(cv$record_evals$valid$rmse$eval))
+}
+
+# find the index of lowest rmse
+best_idx   <- which.min(cv_scores)
+
+# get the parameters for that list
+best_param <- c(base_params, as.list(param_grid[best_idx, ]))
+best_param
+write.csv(best_param_df, "best_lightgbm_params.csv", row.names = FALSE)
+
+```
+
+Read identified tuned hyperparemeters
+
+```{r}
+best_param_df <- read.csv("best_lightgbm_params.csv", stringsAsFactors = FALSE)
+best_param_df
+
+```
+
+The best model is identified as follows
+- learning rate: 0.05
+- num leaves: 64
+- feature fraction: 0.9
+- bagging fraction: 0.9
+- min_data_in_leaf: 20
+
+Let's test the model with such settings on validation test
+
+### 5. Validate the predcitions and see if predictions improved and analyse the residuals
+
+```{r}
+
+# train tuned model on training data, validate on val_1
+dtrain_tuned <- lgb.Dataset(X_tr, label = y_tr)
+dval_tuned   <- lgb.Dataset(X_va, label = y_va)
+
+m1_tuned <- lgb.train(
+  params  = best_param,    # parameters from grid search
+  data    = dtrain_tuned,
+  nrounds = 5000,         
+  valids  = list(val = dval_tuned),
+  early_stopping_rounds = 100,
+  verbose = 1
+)
+
+# Predictions and accuracy on validation set
+pred_tuned <- expm1(predict(m1_tuned, X_va))
+y_val      <- val_1$target_1
+
+resid_tuned <- y_val - pred_tuned
+
+# calcualte metrics
+me_lgbm_tuned   <- mean(resid_tuned, na.rm = TRUE)
+rmse_lgbm_tuned <- sqrt(mean(resid_tuned^2, na.rm = TRUE))
+mae_lgbm_tuned  <- mean(abs(resid_tuned), na.rm = TRUE)
+acf1_lgbm_tuned <- as.numeric(
+  stats::acf(resid_tuned[is.finite(resid_tuned)], plot = FALSE, lag.max = 1)$acf[2]
+)
+
+# summarise metrics in the table
+accuracy_lgbm_tuned <- data.frame(
+  .model = "LightGBM_tuned",
+  .type  = "Test",
+  ME     = me_lgbm_tuned,
+  RMSE   = rmse_lgbm_tuned,
+  MAE    = mae_lgbm_tuned,
+  ACF1   = acf1_lgbm_tuned
+)
+
+# print metrics
+accuracy_lgbm_tuned
+
+```
+Investigate residuals in an analogical way to m1 model
+```{r}
+
+# Investigate residuals for tuned m1 analogically to m1
+
+
+fitted_train_values_tuned <- expm1(predict(m1_tuned, X_tr))
+actual_train_values       <- train_1$target_1
+train_residuals_tuned     <- actual_train_values - fitted_train_values_tuned
+
+
+train_dt_tuned <- as.data.table(train_1)
+train_dt_tuned[, train_residual_tuned := train_residuals_tuned]
+train_dt_tuned[, predicted_date := date + 1L]
+
+
+daily_train_residuals_tuned <- train_dt_tuned[
+  , .(average_residual_tuned = mean(train_residual_tuned, na.rm = TRUE)),
+  by = predicted_date
+]
+
+daily_train_residual_ts_tuned <- as_tsibble(
+  daily_train_residuals_tuned,
+  index = predicted_date
+)
+
+# residuals over time
+p_time_tr_tuned <- autoplot(daily_train_residual_ts_tuned, average_residual_tuned) +
+  labs(
+    title = "LightGBM tuned fit residuals",
+    x = "date",
+    y = "Innovation residuals"
+  )
+
+# autocorrelation
+p_acf_tr_tuned <- daily_train_residual_ts_tuned |>
+  ACF(average_residual_tuned) |>
+  autoplot() +
+  labs(title = NULL, x = "lag [1D]", y = "acf")
+
+# histogram
+p_hist_tr_tuned <- ggplot(daily_train_residuals_tuned, aes(x = average_residual_tuned)) +
+  geom_histogram(bins = 50) +
+  geom_rug(sides = "b", alpha = 0.25) +
+  labs(title = NULL, x = ".resid", y = "count")
+
+p_time_tr_tuned / (p_acf_tr_tuned | p_hist_tr_tuned)
+
+```
+
+
+## Generate table with results of all models
+
+```{r}
+allresults <- bind_rows(
+  accuracy_baseline,
+  accuracy_arima,
+  accuracy_ets,
+  accuracy_lgbm,
+  accuracy_lgbm_tuned
+)
+
+allresults
+
+```
+
