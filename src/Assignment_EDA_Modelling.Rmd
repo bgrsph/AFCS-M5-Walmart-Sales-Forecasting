@@ -255,6 +255,7 @@ no_of_cols
 col_names
 rows_na
 dupls
+```
 
 ```{r}
 
