@@ -506,33 +506,27 @@ full_dataset %>%
 
 ## Seasonal Naive Model
 
-#### 1. Pre-processing
+### 1. Pre-processing
 
 ```{r}
 # Put all the data into daily time-series format
-seasonal_naive_daily <- full_dataset %>%
+texas_daily <- full_dataset %>%
   mutate(date = as.Date(date)) %>%
   group_by(date) %>%
   summarise(sales = sum(units_sold, na.rm = TRUE), .groups = "drop") %>%
   arrange(date) %>%
   as_tsibble(index = date)
-```
-
-#### 2. Split training set into train and validation (28 days)
-
-```{r}
 
 # Determine the horizon and thus the cutoff value
 forecast_horizon <- 28
-cutoff <- max(seasonal_naive_daily$date) - days(forecast_horizon)
+cutoff <- max(texas_daily$date) - days(forecast_horizon)
 
 # Split data into train and validation
-ts_train <- seasonal_naive_daily %>% filter(date <= cutoff)
-ts_validation  <- seasonal_naive_daily %>% filter(date > cutoff)
-
+ts_train <- texas_daily %>% filter(date <= cutoff)
+ts_validation  <- texas_daily %>% filter(date > cutoff)
 ```
 
-#### 3. Fit the model
+### 2. Fit the model
 
 Fit the seasonal naive model for weekly lag and check the other
 baselines for sanity check since the sales data is seasonal, and
@@ -550,7 +544,7 @@ models <- ts_train %>%
   )
 ```
 
-#### 4. Forecast and report the results
+### 3. Forecast and report the results
 
 ```{r}
 # Forecast and report 80% & 90% prediction intervals
@@ -558,19 +552,69 @@ fc_baseline <- models %>% forecast(h = forecast_horizon, level = c(80, 95))
 
 # Calculate accuracy for the validation predictions
 accuracy(fc_baseline, ts_validation)
-autoplot(ts_train, sales) + autolayer(fc_baseline)
+
+# Plot the data and predictions
+autoplot(ts_train, sales) +
+  autolayer(fc_baseline) +
+  labs(title = "Baseline Forecasts (28 days)", x = "Date", y = "Sales")
 ```
 
-### 5. Diagnostics (if needed)
+### 5. Diagnostics (if needed but I don't think so since these are baselines)
 
 ```{r}
-# TODO: Jeremi's Magic Here.
+# TODO maybe. 
 ```
 
 ## ARIMA
 
 ### 1. Pre-processing
 
-```{r}
+No fundamental pre-processing is needed as the dataset that's used in
+seasonal naive (i.e., texas_daily) is sufficient for ARIMA modelling.
 
+```{r}
+# No fundamental preprocessing is needed compared to dataset that's used
+```
+
+Decide whether a (log) transformation is needed or not.
+
+```{r}
+# Plot the sales data
+autoplot(ts_train, sales)
+```
+
+Since the variance is relatively stable across all levels, no
+transformation is needed here.
+
+### 2. Fit the model and report the (automatically) chosen model
+
+```{r}
+fit_arima <- ts_train %>%
+  model(arima = ARIMA(sales))
+
+# report the chosen model
+report(fit_arima)
+```
+
+### 3. Forecast and report the results
+
+```{r}
+# Forecast and report 80% & 90% prediction intervals
+fc_arima <- fit_arima %>%
+  forecast(h = forecast_horizon, level = c(80, 95))
+
+
+# Calculate accuracy for the validation predictions
+accuracy(fc_arima, ts_validation)
+
+# Plot the predictions
+autoplot(ts_train, sales) +
+  autolayer(fc_arima) +
+  labs(title = "ARIMA Forecast (28 days)", x = "Date", y = "Sales")
+```
+
+### 4. Residual Diagnostics
+
+```{r}
+# TODO
 ```
