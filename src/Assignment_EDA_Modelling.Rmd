@@ -100,10 +100,6 @@ print(col_names)
 print("-----------------------")
 print("Period covered")
 print(range)
-#TODO: it's not defined anywhere above this code. 
-print("-----------------------")
-print("Gaps in dates")
-#print(gaps_in_dates) 
 print("-----------------------")
 print("Rows with na values")
 print(rows_na)
@@ -378,7 +374,8 @@ There are no missing dates
 Summary
 
 ```{r}
-# TODO: Problem with the notebook, it can't be copied and pasted. 
+summary(full_dataset$units_sold)
+summary(full_dataset$sell_price)
 ```
 
 Price per date
@@ -616,5 +613,35 @@ autoplot(ts_train, sales) +
 ### 4. Residual Diagnostics
 
 ```{r}
-# TODO
+arima_resid <- fit_arima %>%
+  augment()
+# Residual Time Plot
+arima_resid %>%
+  ggplot(aes(x = date, y = .resid)) +
+  geom_line() +
+  geom_hline(yintercept = 0, color = "red") +
+  labs(title = "ARIMA Residuals Over Time",
+       x = "Date", y = "Residual")
+
+# Residual ACF
+arima_resid %>%
+  ACF(.resid) %>%
+  autoplot() +
+  labs(title = "ACF of ARIMA Residuals")
+
+# Residual PACF
+arima_resid %>%
+  PACF(.resid) %>%
+  autoplot() +
+  labs(title = "PACF of ARIMA Residuals")
+
+# Ljung - Box
+arima_resid %>%
+  features(.resid, ljung_box, lag = 28, dof = 0)
+# Histogram
+arima_resid %>%
+  ggplot(aes(x = .resid)) +
+  geom_histogram(bins = 30, fill = "gray", color = "black") +
+  labs(title = "Histogram of ARIMA Residuals",
+       x = "Residual", y = "Count")
 ```
