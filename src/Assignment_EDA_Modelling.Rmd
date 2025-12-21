@@ -1038,7 +1038,7 @@ dtrain_tuned <- lgb.Dataset(X_tr, label = y_tr)
 dval_tuned   <- lgb.Dataset(X_va, label = y_va)
 
 m1_tuned <- lgb.train(
-  params  = best_param,    # parameters from grid search
+  params  = best_param_df,    # parameters from grid search
   data    = dtrain_tuned,
   nrounds = 5000,         
   valids  = list(val = dval_tuned),
