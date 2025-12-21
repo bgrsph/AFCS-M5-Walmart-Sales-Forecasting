@@ -100,9 +100,10 @@ print(col_names)
 print("-----------------------")
 print("Period covered")
 print(range)
+#TODO: it's not defined anywhere above this code. 
 print("-----------------------")
 print("Gaps in dates")
-#print(gaps_in_dates) --> it's not defined anywhere above this code. 
+#print(gaps_in_dates) 
 print("-----------------------")
 print("Rows with na values")
 print(rows_na)
@@ -377,7 +378,7 @@ There are no missing dates
 Summary
 
 ```{r}
-# Problem with the notebook, it can't be copied and pasted. 
+# TODO: Problem with the notebook, it can't be copied and pasted. 
 ```
 
 Price per date
@@ -499,4 +500,77 @@ full_dataset %>%
     x = "Date",
     y = "Units Sold"
   )
+```
+
+# Modelling
+
+## Seasonal Naive Model
+
+#### 1. Pre-processing
+
+```{r}
+# Put all the data into daily time-series format
+seasonal_naive_daily <- full_dataset %>%
+  mutate(date = as.Date(date)) %>%
+  group_by(date) %>%
+  summarise(sales = sum(units_sold, na.rm = TRUE), .groups = "drop") %>%
+  arrange(date) %>%
+  as_tsibble(index = date)
+```
+
+#### 2. Split training set into train and validation (28 days)
+
+```{r}
+
+# Determine the horizon and thus the cutoff value
+forecast_horizon <- 28
+cutoff <- max(seasonal_naive_daily$date) - days(forecast_horizon)
+
+# Split data into train and validation
+ts_train <- seasonal_naive_daily %>% filter(date <= cutoff)
+ts_validation  <- seasonal_naive_daily %>% filter(date > cutoff)
+
+```
+
+#### 3. Fit the model
+
+Fit the seasonal naive model for weekly lag and check the other
+baselines for sanity check since the sales data is seasonal, and
+seasonal naive should produce the lowest RMSE. We'll use seasonal naive
+in the report as a baseline.
+
+```{r}
+# Fit the baseline models
+models <- ts_train %>%
+  model(
+    Mean          = MEAN(sales),
+    Naive         = NAIVE(sales),
+    Seasonal_naive= SNAIVE(sales ~ lag("week")),
+    Drift         = RW(sales ~ drift())
+  )
+```
+
+#### 4. Forecast and report the results
+
+```{r}
+# Forecast and report 80% & 90% prediction intervals
+fc_baseline <- models %>% forecast(h = forecast_horizon, level = c(80, 95))
+
+# Calculate accuracy for the validation predictions
+accuracy(fc_baseline, ts_validation)
+autoplot(ts_train, sales) + autolayer(fc_baseline)
+```
+
+### 5. Diagnostics (if needed)
+
+```{r}
+# TODO: Jeremi's Magic Here.
+```
+
+## ARIMA
+
+### 1. Pre-processing
+
+```{r}
+
 ```

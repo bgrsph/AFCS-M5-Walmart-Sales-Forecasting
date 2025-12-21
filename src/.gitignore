@@ -1,1 +1,14 @@
+# Dataset files
 data/*
+# --- R / RMarkdown outputs ---
+*.log
+*.pdf
+
+# knitr / rmarkdown
+*_cache/
+*_files/
+
+# R session files
+.Rhistory
+.RData
+.Rproj.user/
