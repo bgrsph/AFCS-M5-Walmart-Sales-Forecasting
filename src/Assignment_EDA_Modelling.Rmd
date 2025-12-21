@@ -1,0 +1,502 @@
+---
+header-includes:
+- \usepackage{xcolor}
+- \usepackage{color} 
+- \usepackage{fancyhdr,color}
+- \usepackage{lipsum}
+- \fancyfoot[CE] {\thepage}
+title: "Assignment 3"
+subtitle: "Applied Forecasting in Complex Systems 2025"
+author: Bugra Sipahioglu (14318334), Despoina Delipalla (16324897), Jeremi Wasilewski (14271028)
+date: "University of Amsterdam \n &nbsp;  \n December 23, 2025"
+output: pdf_document
+fontsize: 11pt
+highlight: tango
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  fig.align = 'center',   # center plots
+  #fig.width = 5,          # width in inches (smaller than default 6)
+  #fig.height = 2,         # height in inches (smaller than default 4)
+  fig.pos = 'H',          # keep figures in place
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  cache = TRUE,
+  dev.args = list(pointsize = 11)
+)
+options(digits = 3, width = 60)
+
+#install.packages("readr")
+#install.packages("tsibble")
+
+library(readr)
+library(dplyr)
+library(lubridate)
+library(dplyr)
+library(tidyr)
+library(readr)
+library(ggplot2)
+library(tsibble)
+library(ggplot2)
+library(fpp3)
+library(fable)
+library(feasts)
+```
+
+# Exploratory Data Analysis
+
+#### Load the Data
+
+```{r}
+calendar <- read_csv("../data/calendar_afcs2025.csv")  # date, event_type, week_id
+sell_prices <- read_csv("../data/sell_prices_afcs2025.csv")  # week_id, item_id, price
+sales_data  <- read_csv("../data/sales_train_validation_afcs2025.csv")  # item_id, product_type, items_sold
+     
+```
+
+#### Calendar
+
+```{r}
+# Transform date format to date and ensure that dates are in chronological order
+calendar <- calendar %>%
+  mutate(date = as.Date(date, format = "%m/%d/%Y"))%>%
+ arrange(date)
+
+
+# Add column day_id
+calendar <- calendar %>%   
+  mutate(day_id = paste0("id_", row_number()))
+```
+
+```{r}
+# rows and columns
+no_of_rows = nrow(calendar)
+no_of_cols = ncol(calendar)
+col_names = colnames(calendar)
+
+# Dates
+range = range(calendar$date)
+
+# NA values
+rows_na = colSums(is.na(calendar))
+
+# Duplicates
+dupls = anyDuplicated(calendar)
+
+
+print("Number of rows") 
+print(no_of_rows)
+print("-----------------------")
+print("Number of columns")
+print(no_of_cols)
+print("-----------------------")
+print("Column names:")
+print(col_names)
+print("-----------------------")
+print("Period covered")
+print(range)
+print("-----------------------")
+print("Gaps in dates")
+#print(gaps_in_dates) --> it's not defined anywhere above this code. 
+print("-----------------------")
+print("Rows with na values")
+print(rows_na)
+print("-----------------------")
+print("Number of duplicates")
+print(dupls)
+```
+
+Colendard contains information about the dates the products are sold.
+Calendar contains columns:
+
+-   date: The date in a "y-m-d" format.
+
+-   wm_yr_wk: The id of the week the date belongs to
+
+-   weekday: The type of the day (Saturday, Sunday, …, Friday).
+
+-   wday: The id of the weekday, starting from Saturday.
+
+-   month: The month of the date.
+
+-   year: The year of the date.
+
+-   event_name_1: If the date includes an event, the name of this event.
+
+-   event_type_1: If the date includes an event, the type of this event.
+
+-   event_name_2: If the date includes a second event, the name of this
+    event.
+
+-   event_type_2: If the date includes a second event, the type of this
+    event.
+
+-   snap_TX: A binary variable (0 or 1) indicating whether the stores of
+    TX, allow SNAP3 purchases on the examined date. 1 indicates that
+    SNAP purchases are allowed.
+
+The dataset covers the perido from 29/01/2011 to 19/06/2011. There are
+1807 NA values in the event_type_1 columns and 1964 NA values in the
+event_type_2 column, indicating that there were no events on the
+corresponding dates.
+
+#### Sell Prices
+
+```{r}
+# rows and columns
+no_of_rows = nrow(sell_prices)
+no_of_cols = ncol(sell_prices)
+col_names = colnames(sell_prices)
+
+# NA values
+rows_na = colSums(is.na(sell_prices))
+
+# Duplicates
+dupls = anyDuplicated(sell_prices)
+
+
+print("Number of rows") 
+print(no_of_rows)
+print("-----------------------")
+print("Number of columns")
+print(no_of_cols)
+print("-----------------------")
+print("Column names:")
+print(col_names)
+print("-----------------------")
+
+print("Rows with na values")
+print(rows_na)
+print("-----------------------")
+print("Number of duplicates")
+print(dupls)
+```
+
+#### Sales
+
+split column id to store_id and item_id, so they match with the
+corresponding columns from sell_prices and calendar: item_id: item_id,
+dept_id, cat_id store_id: state_id, dtate_store_id
+
+Convert dataset to long format. Create column named day_id that matches
+with calendar's day_id and column units sold that contains information
+about the number of units sold per day.
+
+```{r}
+sales_nc <- sales_data %>%
+  separate(
+    id,
+    into = c("item_id", "dept_id", "cat_id", "state_id", "state_store_id", "dataset_name"),
+    sep = "_"
+  )%>%
+  mutate(
+    store_id = paste(state_id, state_store_id, sep = "_"),
+    item_id = paste(item_id, dept_id, cat_id, sep = "_")  
+  ) %>%
+  select(-state_id, -state_store_id)
+sales <- sales_nc %>%
+  pivot_longer(
+    cols = starts_with("d_"),
+    names_to  = "day_id",
+    names_transform = list(day_id = ~ sub("^d_", "id_", .)),
+    values_to = "units_sold"
+  )
+```
+
+```{r}
+# rows and columns
+no_of_rows = nrow(sales)
+no_of_cols = ncol(sales)
+col_names = colnames(sales)
+
+# NA values
+rows_na = colSums(is.na(sales))
+
+# Duplicates
+dupls = anyDuplicated(sales)
+
+
+print("Number of rows") 
+print(no_of_rows)
+print("-----------------------")
+print("Number of columns")
+print(no_of_cols)
+print("-----------------------")
+print("Column names:")
+print(col_names)
+print("-----------------------")
+
+print("Rows with na values")
+print(rows_na)
+print("-----------------------")
+print("Number of duplicates")
+print(dupls)
+
+summary(sales["units_sold"])
+```
+
+The dataset has 1574399 rows. There are no missing values.\
+The mean number of units sold was 1.904.
+
+#### **Join calendar and sales information**
+
+A left join keeps all rows from the left table and adds matching columns
+from the right table. In this case we use this type of join, because we
+want keep all information from sales, but not information from calendar
+that are actually useless
+
+```{r}
+calendar_sales <- sales%>%
+  left_join(calendar, by = "day_id")
+
+head(calendar_sales)
+```
+
+#### **Join weekly prices and calendar_sales**
+
+```{r}
+full_dataset <- calendar_sales %>%
+  left_join(
+    sell_prices,
+    by = c("store_id", "item_id", "wm_yr_wk")
+  )
+head(full_dataset)
+```
+
+#### **Data Exploration**
+
+Data types.
+
+```{r}
+str(full_dataset)
+```
+
+```{r}
+no_of_rows = nrow(full_dataset)
+no_of_cols = ncol(full_dataset)
+col_names = colnames(full_dataset)
+
+# NA values
+rows_na = colSums(is.na(full_dataset))
+
+# Duplicates
+dupls = anyDuplicated(full_dataset)
+
+
+print("Number of rows") 
+print(no_of_rows)
+print("-----------------------")
+print("Number of columns")
+print(no_of_cols)
+print("-----------------------")
+print("Column names:")
+print(col_names)
+print("-----------------------")
+
+print("Rows with na values")
+print(rows_na)
+print("-----------------------")
+print("Number of duplicates")
+print(dupls)
+```
+
+```{r}
+
+# Proportions of missing values for event 1 and event 2 in calendar dataset vs full dataset
+
+mean(is.na(calendar$event_name_1))
+mean(is.na(full_dataset$event_name_1))
+
+mean(is.na(calendar$event_name_2))
+mean(is.na(full_dataset$event_name_2))
+```
+
+```{r}
+# Proportion of missing prices at daily level
+mean(is.na(full_dataset$sell_price))
+
+# Proportion of missing prices at weekly level
+mean(
+  is.na(
+    full_dataset %>%
+      distinct(store_id, item_id, wm_yr_wk, sell_price) %>%
+      pull(sell_price)
+  )
+)
+
+```
+
+The dataset containing all information consists of 1574399 rows, which
+is identical to the number of rows in the sales dataset.\
+The dataset has 1447657 and 1571106 missing values for event type 1 and
+2, respectively. These number are larger than the corresponding numbers
+in dataset calendar, however the proportion of missing values in the
+datasets match, indicating that the missing event information is
+expected and correctly propagated through the join.\
+The missing sell_price values occur on weeks where no price was recorded
+(e.g., the item was not sold or not available), and these weekly gaps
+are repeated across daily observations after joining prices to the sales
+data. This is confirmed by the fact that the proportion of missing
+values on a daily basis is similar to the proportion of missing values
+on a weekly basis.
+
+Zero sales and missing sales
+
+```{r}
+
+full_dataset %>%
+  summarise(
+    zero_sales = sum(units_sold == 0, na.rm = TRUE),
+    na_sales   = sum(is.na(units_sold))
+  )
+```
+
+Date Continuity
+
+```{r}
+full_dataset %>%
+  arrange(store_id, item_id, date) %>%
+  group_by(store_id, item_id) %>%
+  summarise(
+    min_date = min(date),
+    max_date = max(date),
+    n_days   = n(), #number of rows in data 
+    span     = as.integer(max_date - min_date) + 1, # number of days with data
+    .groups = "drop"
+  ) %>%
+  filter(n_days != span)
+```
+
+There are no missing dates
+
+Summary
+
+```{r}
+# Problem with the notebook, it can't be copied and pasted. 
+```
+
+Price per date
+
+```{r}
+full_dataset %>%
+  filter(!is.na(sell_price)) %>%
+  group_by(date) %>%
+  summarise(avg_price = mean(sell_price)) %>%
+  as_tsibble(index = date) %>%
+  autoplot(avg_price)
+```
+
+Price - Event
+
+```{r}
+full_dataset%>%
+  filter(!is.na(sell_price)) %>%
+  mutate(event = if_else(is.na(event_name_1), "No event", "Event")) %>%
+  group_by(date, event) %>%
+  summarise(avg_price = mean(sell_price), .groups = "drop") %>%
+  as_tsibble(key = event, index = date) %>%
+  autoplot(avg_price)
+```
+
+Sales per weekday
+
+```{r}
+full_dataset%>%
+  group_by(weekday) %>%
+  summarise(avg_sales = mean(units_sold)) %>%
+  ggplot(aes(weekday, avg_sales)) +
+  geom_col()
+```
+
+Sales per category
+
+```{r}
+full_dataset%>%
+  group_by(cat_id) %>%
+  summarise(avg_sales = mean(units_sold)) %>%
+  ggplot(aes(cat_id, avg_sales)) +
+  geom_col()
+```
+
+Event Impact
+
+```{r}
+full_dataset%>%
+  mutate(event = if_else(is.na(event_name_1), "No event", "Event")) %>%
+  group_by(date, event) %>%
+  summarise(total_sales = sum(units_sold), .groups = "drop") %>%
+  as_tsibble(key = event, index = date) %>%
+  autoplot(total_sales)
+```
+
+SNAP effect
+
+```{r}
+ full_dataset%>%
+  group_by(date, snap_TX) %>%
+  summarise(total_sales = sum(units_sold), .groups = "drop") %>%
+  as_tsibble(key = snap_TX, index = date) %>%
+  autoplot(total_sales)
+```
+
+#### Total Sales
+
+```{r}
+full_dataset%>%
+  group_by(date) %>%
+  summarise(total_sales = sum(units_sold)) %>%
+  as_tsibble(index = date) %>%
+  autoplot(total_sales)
+```
+
+Weekly Sales
+
+```{r}
+full_dataset %>%
+  group_by(week = yearweek(date)) %>%
+  summarise(total_sales = sum(units_sold), .groups = "drop") %>%
+  as_tsibble(index = week) %>%
+  autoplot(total_sales)
+```
+
+STL Decomposition
+
+```{r}
+full_dataset %>%
+  group_by(week = yearweek(date)) %>%
+  summarise(total_sales = sum(units_sold), .groups = "drop") %>%
+  as_tsibble(index = week) %>%
+  model(STL(total_sales)) %>%
+  components() %>%
+  autoplot() +
+  labs(
+    title = "STL Decomposition of Weekly Total Sales",
+    x = "Week",
+    y = "Units Sold"
+  )
+```
+
+Increasing trend\
+Seasonality (same pattern every year)
+
+```{r}
+full_dataset %>%
+  group_by(date) %>%
+  summarise(total_sales = sum(units_sold), .groups = "drop") %>%
+  as_tsibble(index = date) %>%
+  model(
+    STL(total_sales ~ season(window = "periodic"))
+  ) %>%
+  components() %>%
+  autoplot() +
+  labs(
+    title = "STL Decomposition of Daily Total Sales",
+    x = "Date",
+    y = "Units Sold"
+  )
+```
