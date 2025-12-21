@@ -589,7 +589,6 @@ autoplot(ts_train, sales) +
 ### 4. Residual Diagnostics
 
 ```{r}
-<<<<<<< HEAD
 fit_arima |>
   gg_tsresiduals()
 =======
