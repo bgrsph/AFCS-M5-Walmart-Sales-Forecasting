@@ -1,3 +1,4 @@
+
 ---
 header-includes:
 - \usepackage{xcolor}
@@ -53,9 +54,9 @@ library(feasts)
 #### Load the Data
 
 ```{r}
-calendar <- read_csv("../data/calendar_afcs2025.csv")  # date, event_type, week_id
-sell_prices <- read_csv("../data/sell_prices_afcs2025.csv")  # week_id, item_id, price
-sales_data  <- read_csv("../data/sales_train_validation_afcs2025.csv")  # item_id, product_type, items_sold
+calendar <- read_csv("data/calendar_afcs2025.csv")  # date, event_type, week_id
+sell_prices <- read_csv("data/sell_prices_afcs2025.csv")  # week_id, item_id, price
+sales_data  <- read_csv("data/sales_train_validation_afcs2025.csv")  # item_id, product_type, items_sold
      
 ```
 
@@ -88,28 +89,13 @@ rows_na = colSums(is.na(calendar))
 # Duplicates
 dupls = anyDuplicated(calendar)
 
+no_of_rows
+no_of_cols
+col_names
+range
+rows_na
+dupls
 
-print("Number of rows") 
-print(no_of_rows)
-print("-----------------------")
-print("Number of columns")
-print(no_of_cols)
-print("-----------------------")
-print("Column names:")
-print(col_names)
-print("-----------------------")
-print("Period covered")
-print(range)
-#TODO: it's not defined anywhere above this code. 
-print("-----------------------")
-print("Gaps in dates")
-#print(gaps_in_dates) 
-print("-----------------------")
-print("Rows with na values")
-print(rows_na)
-print("-----------------------")
-print("Number of duplicates")
-print(dupls)
 ```
 
 Colendard contains information about the dates the products are sold.
@@ -160,22 +146,11 @@ rows_na = colSums(is.na(sell_prices))
 # Duplicates
 dupls = anyDuplicated(sell_prices)
 
-
-print("Number of rows") 
-print(no_of_rows)
-print("-----------------------")
-print("Number of columns")
-print(no_of_cols)
-print("-----------------------")
-print("Column names:")
-print(col_names)
-print("-----------------------")
-
-print("Rows with na values")
-print(rows_na)
-print("-----------------------")
-print("Number of duplicates")
-print(dupls)
+no_of_rows 
+no_of_cols
+col_names 
+rows_na 
+dupls 
 ```
 
 #### Sales
@@ -221,23 +196,11 @@ rows_na = colSums(is.na(sales))
 # Duplicates
 dupls = anyDuplicated(sales)
 
-
-print("Number of rows") 
-print(no_of_rows)
-print("-----------------------")
-print("Number of columns")
-print(no_of_cols)
-print("-----------------------")
-print("Column names:")
-print(col_names)
-print("-----------------------")
-
-print("Rows with na values")
-print(rows_na)
-print("-----------------------")
-print("Number of duplicates")
-print(dupls)
-
+no_of_rows
+no_of_cols
+col_names
+rows_na
+dupls
 summary(sales["units_sold"])
 ```
 
@@ -266,7 +229,6 @@ full_dataset <- calendar_sales %>%
     sell_prices,
     by = c("store_id", "item_id", "wm_yr_wk")
   )
-head(full_dataset)
 ```
 
 #### **Data Exploration**
@@ -288,23 +250,11 @@ rows_na = colSums(is.na(full_dataset))
 # Duplicates
 dupls = anyDuplicated(full_dataset)
 
-
-print("Number of rows") 
-print(no_of_rows)
-print("-----------------------")
-print("Number of columns")
-print(no_of_cols)
-print("-----------------------")
-print("Column names:")
-print(col_names)
-print("-----------------------")
-
-print("Rows with na values")
-print(rows_na)
-print("-----------------------")
-print("Number of duplicates")
-print(dupls)
-```
+no_of_rows
+no_of_cols
+col_names
+rows_na
+dupls
 
 ```{r}
 
@@ -378,7 +328,8 @@ There are no missing dates
 Summary
 
 ```{r}
-# TODO: Problem with the notebook, it can't be copied and pasted. 
+summary(full_dataset$units_sold)
+summary(full_dataset$sell_price)
 ```
 
 Price per date
@@ -637,8 +588,42 @@ autoplot(ts_train, sales) +
 ### 4. Residual Diagnostics
 
 ```{r}
+<<<<<<< HEAD
 fit_arima |>
   gg_tsresiduals()
+=======
+arima_resid <- fit_arima %>%
+  augment()
+# Residual Time Plot
+arima_resid %>%
+  ggplot(aes(x = date, y = .resid)) +
+  geom_line() +
+  geom_hline(yintercept = 0, color = "red") +
+  labs(title = "ARIMA Residuals Over Time",
+       x = "Date", y = "Residual")
+
+# Residual ACF
+arima_resid %>%
+  ACF(.resid) %>%
+  autoplot() +
+  labs(title = "ACF of ARIMA Residuals")
+
+# Residual PACF
+arima_resid %>%
+  PACF(.resid) %>%
+  autoplot() +
+  labs(title = "PACF of ARIMA Residuals")
+
+# Ljung - Box
+arima_resid %>%
+  features(.resid, ljung_box, lag = 28, dof = 0)
+# Histogram
+arima_resid %>%
+  ggplot(aes(x = .resid)) +
+  geom_histogram(bins = 30, fill = "gray", color = "black") +
+  labs(title = "Histogram of ARIMA Residuals",
+       x = "Residual", y = "Count")
+>>>>>>> f3862a146cdbdd93da182d02634da7f2f6a602a2
 ```
 ```{r}
 arima_resid <- fit_arima %>%
