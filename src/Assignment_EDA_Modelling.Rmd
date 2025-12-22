@@ -8,7 +8,7 @@ header-includes:
 - \fancyfoot[CE] {\thepage}
 title: "Assignment 3"
 subtitle: "Applied Forecasting in Complex Systems 2025"
-author: Bugra Sipahioglu (14318334), Despoina Delipalla (16324897), Jeremi Wasilewski (14271028)
+author: Bugra Sipahioglu (14318334), Christos Georghiou (16072766), Despoina Delipalla (16324897), Jeremi Wasilewski (14271028)
 date: "University of Amsterdam \n &nbsp;  \n December 23, 2025"
 output: pdf_document
 fontsize: 11pt
@@ -732,14 +732,15 @@ setorder(dt, id, date)  # [web:307]
 dt[, sell_price_ff := nafill(sell_price, type = "locf"), by = id]  # [web:410]
 
 # lags
-for (L in c(1, 7, 14, 28)) {
+for (L in c(1, 2, 3, 7, 14, 28)) {
   dt[, paste0("lag_", L) := shift(sales, n = L, type = "lag"), by = id]  # [web:137]
 }
 
 # rolling statistics
 dt[, roll_mean_7  := frollmean(sales, 7,  align = "right"), by = id]
 dt[, roll_mean_28 := frollmean(sales, 28, align = "right"), by = id]
-dt[, roll_sd_28   := frollapply(sales, 28, sd, align = "right"), by = id]
+dt[, roll_sd_28   := frollapply(sales, 28, sd,     align = "right"), by = id]
+dt[, roll_med_28  := frollapply(sales, 28, median, align = "right"), by = id]
 
 # intermittency
 dt[, nz_28 := frollsum(as.integer(sales > 0), 28, align = "right"), by = id]
@@ -764,6 +765,7 @@ dt[, target_1 := shift(sales, 1, type = "lead"), by = id]
 
 train_1 <- dt[date <  val_start & !is.na(target_1)]
 val_1   <- dt[date >= val_start & !is.na(target_1)]
+
 ```
 
 
@@ -788,8 +790,8 @@ Prepare features:
 ```{r}
 feat_cols <- c(
   "wday","month","year","snap_TX",
-  "lag_1","lag_7","lag_14","lag_28",
-  "roll_mean_7","roll_mean_28","roll_sd_28","zero_ratio_28",
+  "lag_1","lag_2","lag_3","lag_7","lag_14","lag_28",
+  "roll_mean_7","roll_mean_28","roll_med_28","roll_sd_28","zero_ratio_28",
   "sell_price_ff","price_rel","price_pct_change_7","is_price_drop"
 )
 
@@ -828,7 +830,9 @@ params <- list(
   feature_fraction = 0.8,
   bagging_fraction = 0.8,
   bagging_freq = 1,
-  min_data_in_leaf = 50
+  min_data_in_leaf = 50,
+  lambda_l2 = 1,
+  lambda_l1 = 0.1
 )
 
 m1 <- lgb.train(
