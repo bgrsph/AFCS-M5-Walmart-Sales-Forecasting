@@ -1,4 +1,3 @@
-
 ---
 header-includes:
 - \usepackage{xcolor}
@@ -57,7 +56,16 @@ library(feasts)
 calendar <- read_csv("../data/calendar_afcs2025.csv")  # date, event_type, week_id
 sell_prices <- read_csv("../data/sell_prices_afcs2025.csv")  # week_id, item_id, price
 sales_data  <- read_csv("../data/sales_train_validation_afcs2025.csv")  # item_id, product_type, items_sold
+
+validation_data <- read_csv("../data/sales_test_validation_afcs2025.csv")
+evaluation_data <- read_csv("../data/sales_test_evaluation_afcs_2025.csv")
      
+```
+
+```{r}
+sales_data
+validation_data
+evaluation_data
 ```
 
 #### Calendar
@@ -98,7 +106,7 @@ dupls
 
 ```
 
-Colendard contains information about the dates the products are sold.
+Calendard contains information about the dates the products are sold.
 Calendar contains columns:
 
 -   date: The date in a "y-m-d" format.
@@ -182,6 +190,46 @@ sales <- sales_nc %>%
     names_transform = list(day_id = ~ sub("^d_", "id_", .)),
     values_to = "units_sold"
   )
+
+# Repeat for the validation data
+sales_nc_validation <- validation_data %>%
+  separate(
+    id,
+    into = c("item_id", "dept_id", "cat_id", "state_id", "state_store_id", "dataset_name"),
+    sep = "_"
+  )%>%
+  mutate(
+    store_id = paste(state_id, state_store_id, sep = "_"),
+    item_id = paste(item_id, dept_id, cat_id, sep = "_")  
+  ) %>%
+  select(-state_id, -state_store_id)
+sales_validation <- sales_nc_validation %>%
+  pivot_longer(
+    cols = starts_with("d_"),
+    names_to  = "day_id",
+    names_transform = list(day_id = ~ sub("^d_", "id_", .)),
+    values_to = "units_sold"
+  )
+
+# Repeat for evaluation data
+sales_nc_evaluation <- evaluation_data %>%
+  separate(
+    id,
+    into = c("item_id", "dept_id", "cat_id", "state_id", "state_store_id", "dataset_name"),
+    sep = "_"
+  )%>%
+  mutate(
+    store_id = paste(state_id, state_store_id, sep = "_"),
+    item_id = paste(item_id, dept_id, cat_id, sep = "_")  
+  ) %>%
+  select(-state_id, -state_store_id)
+sales_evaluation <- sales_nc_evaluation %>%
+  pivot_longer(
+    cols = starts_with("d_"),
+    names_to  = "day_id",
+    names_transform = list(day_id = ~ sub("^d_", "id_", .)),
+    values_to = "units_sold"
+  )
 ```
 
 ```{r}
@@ -219,12 +267,38 @@ calendar_sales <- sales%>%
   left_join(calendar, by = "day_id")
 
 head(calendar_sales)
+
+# Repeat for validation
+calendar_sales_validation <- sales_validation%>%
+  left_join(calendar, by = "day_id")
+
+head(calendar_sales_validation)
+
+# Repeat for evaluation
+calendar_sales_evaluation <- sales_evaluation%>%
+  left_join(calendar, by = "day_id")
+
+head(calendar_sales_evaluation)
 ```
 
 #### **Join weekly prices and calendar_sales**
 
 ```{r}
 full_dataset <- calendar_sales %>%
+  left_join(
+    sell_prices,
+    by = c("store_id", "item_id", "wm_yr_wk")
+  )
+
+# Repeat for validation
+full_dataset_validation <- calendar_sales_validation %>%
+  left_join(
+    sell_prices,
+    by = c("store_id", "item_id", "wm_yr_wk")
+  )
+
+# Repeat for evaluation
+full_dataset_evaluation <- calendar_sales_evaluation %>%
   left_join(
     sell_prices,
     by = c("store_id", "item_id", "wm_yr_wk")
@@ -236,7 +310,10 @@ full_dataset <- calendar_sales %>%
 Data types.
 
 ```{r}
-str(full_dataset)
+#str(full_dataset)
+#str(full_dataset_validation)
+str(full_dataset_evaluation)
+
 ```
 
 ```{r}
@@ -302,6 +379,12 @@ Zero sales and missing sales
 ```{r}
 
 full_dataset %>%
+  summarise(
+    zero_sales = sum(units_sold == 0, na.rm = TRUE),
+    na_sales   = sum(is.na(units_sold))
+  )
+
+full_dataset_validation %>%
   summarise(
     zero_sales = sum(units_sold == 0, na.rm = TRUE),
     na_sales   = sum(is.na(units_sold))
@@ -462,20 +545,42 @@ full_dataset %>%
 
 ```{r}
 # Put all the data into daily time-series format
-texas_daily <- full_dataset %>%
+ts_train <- full_dataset %>%
   mutate(date = as.Date(date)) %>%
   group_by(date) %>%
   summarise(sales = sum(units_sold, na.rm = TRUE), .groups = "drop") %>%
   arrange(date) %>%
   as_tsibble(index = date)
 
-# Determine the horizon and thus the cutoff value
-forecast_horizon <- 28
-cutoff <- max(texas_daily$date) - days(forecast_horizon)
+ts_validation <- full_dataset_validation %>%
+  mutate(date = as.Date(date)) %>%
+  group_by(date) %>%
+  summarise(sales = sum(units_sold, na.rm = TRUE), .groups = "drop") %>%
+  arrange(date) %>%
+  as_tsibble(index = date)
 
-# Split data into train and validation
-ts_train <- texas_daily %>% filter(date <= cutoff)
-ts_validation  <- texas_daily %>% filter(date > cutoff)
+ts_evaluation <- full_dataset_evaluation %>%
+  mutate(date = as.Date(date)) %>%
+  group_by(date) %>%
+  summarise(sales = sum(units_sold, na.rm = TRUE), .groups = "drop") %>%
+  arrange(date) %>%
+  as_tsibble(index = date)
+
+# # Determine the horizon and thus the cutoff value
+forecast_horizon <- nrow(ts_validation)
+
+# cutoff <- max(texas_daily$date) - days(forecast_horizon)
+# 
+# # Split data into train and validation
+# ts_train <- texas_daily %>% filter(date <= cutoff)
+# ts_validation  <- texas_daily %>% filter(date > cutoff)
+```
+
+Check out whether training and validation is set correctly.
+
+```{r}
+range(ts_train$date)
+range(ts_validation$date)
 ```
 
 ### 2. Fit the model
@@ -510,7 +615,16 @@ accuracy_baseline
 autoplot(ts_train, sales) +
   autolayer(fc_baseline) +
   labs(title = "Baseline Forecasts (28 days)", x = "Date", y = "Sales")
+``` 
+### Evaluation
+```{r}
+fc_ets_eval <- fit_ets %>%
+  forecast(new_data = ts_evaluation, level = c(80, 95))
+
+accuracy_ets <- accuracy(fc_ets_eval, ts_evaluation)
+accuracy_ets
 ```
+
 
 ### 5. Diagnostics (if needed but I don't think so since these are baselines)
 
@@ -667,6 +781,7 @@ arima_resid %>%
 No prepcoessing to the data is necessary compared to previous models
 
 ### 1. Fit the model
+
 ```{r}
 fit_ets <- ts_train %>%
 model(ETS = ETS(sales))
@@ -675,9 +790,7 @@ report(fit_ets)
 
 ```
 
-
 ### 2. Generate and plot the predictions
-
 
 ```{r}
 # generate the predcitions
@@ -694,6 +807,14 @@ accuracy_ets <- accuracy(fc_ets, ts_validation)
 accuracy_ets
 ```
 
+### Evaluation on test set
+```{r}
+fc_ets_eval <- fit_ets %>%
+  forecast(new_data = ts_evaluation, level = c(80, 95))
+
+accuracy_ets <- accuracy(fc_ets_eval, ts_evaluation)
+accuracy_ets
+```
 
 ### 3. Resdual diagnostics
 
@@ -702,41 +823,50 @@ fit_ets |>
   gg_tsresiduals()
 ```
 
-
 ## LightGBM model
 
 ### 1. Pre-processsing
 
-In order to create features for light gbm model - we need to prepare full_dataset to handle the feature enginerreing from 'LightGBM.Rmd' notebook
+In order to create features for light gbm model - we need to prepare
+full_dataset to handle the feature enginerreing from 'LightGBM.Rmd'
+notebook
 
 ```{r}
 library(dplyr)
 library(data.table)
 library(lightgbm)
 
-# parse full_dataset as table
-dt <- as.data.table(full_dataset)
+# create splits
+dt_tr <- as.data.table(full_dataset)
+dt_tr[, split := "train"]
 
-# rename units_sold to sales to match Chris' naming
+dt_va <- as.data.table(full_dataset_validation)
+dt_va[, split := "val"]
+
+dt_te <- as.data.table(full_dataset_evaluation)
+dt_te[, split := "test"]
+
+# bind tables to create features
+dt <- rbindlist(list(dt_tr, dt_va, dt_te), use.names = TRUE, fill = TRUE)
+
+
 dt[, sales := as.numeric(units_sold)]
-# ensure date is in date format
-dt[, date := as.Date(date)]
+dt[, date  := as.Date(date)]
+dt[, id    := paste(item_id, store_id, sep = "_")]
 
-# create uniqe series id (one time series per item-store)
-dt[, id := paste(item_id, store_id, sep = "_")]
+# sort
+setorder(dt, id, date)
 
-# sort for correct lags/rolling
-setorder(dt, id, date)  # [web:307]
 
-# forward-fill prices within each series
-dt[, sell_price_ff := nafill(sell_price, type = "locf"), by = id]  # [web:410]
+# forward-fill prices
+dt[, sell_price_ff := nafill(sell_price, type = "locf"), by = id]
 
 # lags
 for (L in c(1, 2, 3, 7, 14, 28)) {
-  dt[, paste0("lag_", L) := shift(sales, n = L, type = "lag"), by = id]  # [web:137]
+  dt[, paste0("lag_", L) := shift(sales, n = L, type = "lag"), by = id]
 }
 
-# rolling statistics
+# rolling stats
 dt[, roll_mean_7  := frollmean(sales, 7,  align = "right"), by = id]
 dt[, roll_mean_28 := frollmean(sales, 28, align = "right"), by = id]
 dt[, roll_sd_28   := frollapply(sales, 28, sd,     align = "right"), by = id]
@@ -756,36 +886,30 @@ dt[, is_price_drop := as.integer(price_pct_change_7 < 0)]
 dt[, price_mean_item := mean(sell_price_ff, na.rm = TRUE), by = id]
 dt[, price_rel := sell_price_ff / price_mean_item]
 
-# time-validation
-max_date  <- max(dt$date, na.rm = TRUE)
-val_start <- max_date - 27
-
-# tomorrow target
-dt[, target_1 := shift(sales, 1, type = "lead"), by = id]  
-
-train_1 <- dt[date <  val_start & !is.na(target_1)]
-val_1   <- dt[date >= val_start & !is.na(target_1)]
+# tomorrow target (1-step ahead)
+dt[, target_1 := shift(sales, 1, type = "lead"), by = id]
 
 ```
 
-
 Prepare features:
 
-* wday: Day of the week
-* month: Month
-* year: Year
-* snap_TX: Binary indicator for SNAP eligibility in Texas
-* lag_1: Sales from yesterday
-* lag_7: Sales from last week
-* lag_28: Sales from last month
-* roll_mean_7: Average sales over last 7 days
-* roll_mean_28: Average sales over last month
-* roll_sd_28: Standard deviation of sales over last month
-* zero_ratio_28: Fraction of zero-sales days in last 28 days (Distinguishes slow-moving items from consistently selling ones)
-* sell_price_ff: Current effective price
-* price_rel: Current price relative to item’s average price (Is the item expensive or discounted relative to itself)
-* price_pct_change_7: Percentage price change over the last 7 days
-* is_price_drop: Binary indicator of a recent price decrease.
+-   wday: Day of the week
+-   month: Month
+-   year: Year
+-   snap_TX: Binary indicator for SNAP eligibility in Texas
+-   lag_1: Sales from yesterday
+-   lag_7: Sales from last week
+-   lag_28: Sales from last month
+-   roll_mean_7: Average sales over last 7 days
+-   roll_mean_28: Average sales over last month
+-   roll_sd_28: Standard deviation of sales over last month
+-   zero_ratio_28: Fraction of zero-sales days in last 28 days
+    (Distinguishes slow-moving items from consistently selling ones)
+-   sell_price_ff: Current effective price
+-   price_rel: Current price relative to item’s average price (Is the
+    item expensive or discounted relative to itself)
+-   price_pct_change_7: Percentage price change over the last 7 days
+-   is_price_drop: Binary indicator of a recent price decrease.
 
 ```{r}
 feat_cols <- c(
@@ -795,15 +919,26 @@ feat_cols <- c(
   "sell_price_ff","price_rel","price_pct_change_7","is_price_drop"
 )
 
+#missing_feats <- setdiff(feat_cols, names(dt))
+#print(missing_feats)
+#stopifnot(length(missing_feats) == 0)
 
-missing_feats <- setdiff(feat_cols, names(dt))
-print(missing_feats)
-stopifnot(length(missing_feats) == 0)
+train_1 <- dt[split == "train" & !is.na(target_1)]
+val_1   <- dt[split == "val"   & !is.na(target_1)]
+test_1  <- dt[split == "test"  & !is.na(target_1)]
 
 train_1 <- train_1[complete.cases(train_1[, ..feat_cols])]
 val_1   <- val_1[complete.cases(val_1[, ..feat_cols])]
+test_1  <- test_1[complete.cases(test_1[, ..feat_cols])]
 
 ```
+
+```{r}
+y_tr <- log1p(train_1$target_1)
+X_tr <- as.matrix(train_1[, ..feat_cols])
+```
+
+### 2. Fit the model
 
 ```{r}
 y_tr <- log1p(train_1$target_1)
@@ -811,13 +946,6 @@ y_va <- log1p(val_1$target_1)
 
 X_tr <- as.matrix(train_1[, ..feat_cols])
 X_va <- as.matrix(val_1[, ..feat_cols])
-
-```
-
-
-### 2. Fit the model
-
-```{r}
 
 dtrain <- lgb.Dataset(X_tr, label = y_tr)
 dval   <- lgb.Dataset(X_va, label = y_va)
@@ -844,45 +972,32 @@ m1 <- lgb.train(
   verbose = 1
 )
 
+
 ```
 
 ### 3. Validate the predictions
 
 ```{r}
-# prediction for target values
-pred <- expm1(predict(m1, X_va))
 
-# factual target values
-y <- val_1$target_1
+y_te <- log1p(test_1$target_1)
 
-# residuals
-e <- y - pred
+# construct feature matrix for the test set
+X_te <- as.matrix(test_1[, ..feat_cols])
 
-# calcualte accuracy metrics
-me_lgbm   <- mean(e, na.rm = TRUE)
-rmse_lgbm <- sqrt(mean(e^2, na.rm = TRUE))
-mae_lgbm  <- mean(abs(e), na.rm = TRUE)
+pred_te <- expm1(predict(m1, X_te))
+y_te_raw <- test_1$target_1
 
-# calculate autocorrelation for lag 1
-acf1_lgbm <- as.numeric(stats::acf(e[is.finite(e)], plot = FALSE, lag.max = 1)$acf[2])  
+# compute residuals 
+e_te <- y_te_raw - pred_te
 
-# parse metrics as table
-accuracy_lgbm <- data.frame(
-  .model = "LightGBM",
-  .type  = "Test",
-  ME = me_lgbm,
-  RMSE = rmse_lgbm,
-  MAE = mae_lgbm,
-  ACF1 = acf1_lgbm
-)
-
-# present metrics
-accuracy_lgbm
+rmse_test <- sqrt(mean(e_te^2, na.rm = TRUE))
+rmse_test
 
 
 ```
 
 ### 3. Evaluate residuals
+
 ```{r}
 
 library(patchwork)
@@ -935,7 +1050,6 @@ p_hist_tr <- ggplot(daily_train_residuals, aes(x = average_residual)) +
   geom_rug(sides = "b", alpha = 0.25) +
   labs(title = NULL, x = ".resid", y = "count")
 
-# present plots
 p_time_tr / (p_acf_tr | p_hist_tr)
 
 ```
@@ -972,13 +1086,12 @@ set.seed(123)
 
 ```
 
+Run cross validation. Note: At the moment commented out for knitting
+efficiency. The output of the cross validaiton is saved in csv file and
+read in the code at the bottom of the next chunk.
 
-Run cross validation.
-Note: At the moment commented out for knitting efficiency. The output of the cross validaiton is saved in csv file and read in the code at the bottom of the next chunk.
-
-```{r} eval=FALSE
+```{r}
 # cv settings
-# for computing efficiency only 10 rounds of cross-validation are used per each parameter setting
 nrounds_cv      <- 100
 early_stopping  <- 10
 n_folds         <- 3
@@ -1024,12 +1137,9 @@ best_param_df <- as.list(best_param_df[1, ])
 
 ```
 
-The best model is identified as follows
-- learning rate: 0.05
-- num leaves: 64
-- feature fraction: 0.9
-- bagging fraction: 0.9
-- min_data_in_leaf: 20
+The best model is identified as follows - learning rate: 0.05 - num
+leaves: 64 - feature fraction: 0.9 - bagging fraction: 0.9 -
+min_data_in_leaf: 20
 
 Let's test the model with such settings on validation test
 
@@ -1042,7 +1152,7 @@ dtrain_tuned <- lgb.Dataset(X_tr, label = y_tr)
 dval_tuned   <- lgb.Dataset(X_va, label = y_va)
 
 m1_tuned <- lgb.train(
-  params  = best_param_df,    # parameters from grid search
+  params  = best_param_df,  
   data    = dtrain_tuned,
   nrounds = 5000,         
   valids  = list(val = dval_tuned),
@@ -1064,7 +1174,6 @@ acf1_lgbm_tuned <- as.numeric(
   stats::acf(resid_tuned[is.finite(resid_tuned)], plot = FALSE, lag.max = 1)$acf[2]
 )
 
-# summarise metrics in the table
 accuracy_lgbm_tuned <- data.frame(
   .model = "LightGBM_tuned",
   .type  = "Test",
@@ -1074,11 +1183,13 @@ accuracy_lgbm_tuned <- data.frame(
   ACF1   = acf1_lgbm_tuned
 )
 
-# print metrics
+
 accuracy_lgbm_tuned
 
 ```
+
 Investigate residuals in an analogical way to m1 model
+
 ```{r}
 
 # Investigate residuals for tuned m1 analogically to m1
@@ -1128,7 +1239,6 @@ p_time_tr_tuned / (p_acf_tr_tuned | p_hist_tr_tuned)
 
 ```
 
-
 ## Generate table with results of all models
 
 ```{r}
@@ -1143,4 +1253,3 @@ allresults <- bind_rows(
 allresults
 
 ```
-
