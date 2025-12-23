@@ -1153,13 +1153,12 @@ best_idx   <- which.min(cv_scores)
 # get the parameters for that list
 best_param <- c(base_params, as.list(param_grid[best_idx, ]))
 best_param
-write.csv(best_param_df, "best_lightgbm_params.csv", row.names = FALSE)
 
 ```
 
 Read identified tuned hyperparemeters
 
-```{r}
+```{r, eval = FALSE}
 best_param_df <- read.csv("best_lightgbm_params.csv", stringsAsFactors = FALSE)
 best_param_df <- as.list(best_param_df[1, ])
 
@@ -1226,7 +1225,7 @@ train_rmse_tuned <- unlist(m1_tuned$record_evals$train$rmse$eval)
 val_rmse_tuned   <- unlist(m1_tuned$record_evals$val$rmse$eval)
 
 # create a new data frame that has all the data for plotting learning curve
-learning_curve_tuned <- data.frame(
+learning_curve <- data.frame(
   iter = seq_along(train_rmse_tuned),
   rmse_train = train_rmse_tuned,
   rmse_val   = val_rmse_tuned
@@ -1237,6 +1236,7 @@ plot(
   learning_curve$iter,
   learning_curve$rmse_train,
   type = "l",
+  col = "blue",
   lwd  = 2,
   xlab = "Iteration",
   ylab = "RMSE (log1p scale)",
@@ -1246,6 +1246,7 @@ plot(
 lines(
   learning_curve$iter,
   learning_curve$rmse_val,
+  col = "red",
   lwd = 2
 )
 
@@ -1253,6 +1254,7 @@ legend(
   "topright",
   legend = c("Training RMSE", "Validation RMSE"),
   lty = 1,
+  col = c("blue", "red"),
   lwd = 2,
   bty = "n"
 )
