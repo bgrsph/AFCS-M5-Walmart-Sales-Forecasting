@@ -1372,3 +1372,181 @@ ljung_box_results
 
 ```
 
+
+## 28 day forecast plot for Tuned LightGBM
+```{r}
+library(data.table)
+library(ggplot2)
+
+feat_cols <- c(
+  "wday","month","year","snap_TX",
+  "lag_1","lag_2","lag_3","lag_7","lag_14","lag_28",
+  "roll_mean_7","roll_mean_28","roll_med_28","roll_sd_28","zero_ratio_28",
+  "sell_price_ff","price_rel","price_pct_change_7","is_price_drop"
+)
+
+setDT(dt)
+dt[, date := as.Date(date)]
+dt[, id := as.character(id)]   
+setorder(dt, id, date)
+
+# Define "forecast origin"
+origin_date <- max(dt[split %in% c("train","val"), date], na.rm = TRUE)
+h <- 28
+future_dates <- seq(origin_date + 1, origin_date + h, by = "day")
+
+# keep the last 28 observed days per id
+hist <- dt[split %in% c("train","val") & date <= origin_date,
+           .(id, date, sales, wday, month, year, snap_TX, sell_price_ff)]
+hist <- hist[order(id, date)]
+hist <- hist[, tail(.SD, 28), by = id]
+hist[, id := as.character(id)]
+
+# take the rows from test for the next 28 days
+fut <- dt[split == "test" & date %in% future_dates,
+          .(id, date, wday, month, year, snap_TX, sell_price_ff)]
+fut[, id := as.character(id)]
+fut <- fut[order(id, date)]
+
+stopifnot(length(unique(fut$date)) == h)
+
+# price fallback if any NA sneaks in
+fut[, sell_price_ff := nafill(sell_price_ff, type = "locf"), by = id]
+last_price <- hist[, .(last_p = tail(sell_price_ff, 1)), by = id]
+fut <- merge(fut, last_price, by="id", all.x=TRUE)
+fut[is.na(sell_price_ff), sell_price_ff := last_p]
+fut[, last_p := NULL]
+
+# precompute item mean price from available history
+price_mean_item <- dt[, .(price_mean_item = mean(sell_price_ff, na.rm=TRUE)), by = id]
+fut <- merge(fut, price_mean_item, by="id", all.x=TRUE)
+fut[is.na(price_mean_item), price_mean_item := mean(dt$sell_price_ff, na.rm=TRUE)]
+
+# predictions
+fut[, pred := NA_real_]
+
+# rolling 28-day sales 
+buf <- hist[, .(sales_buf = list(sales)), by = id] 
+buf[, id := as.character(id)]
+
+roll_feats <- function(x28) {
+  lag_1  <- tail(x28, 1)
+  lag_2  <- tail(x28, 2)[1]
+  lag_3  <- tail(x28, 3)[1]
+  lag_7  <- tail(x28, 7)[1]
+  lag_14 <- tail(x28, 14)[1]
+  lag_28 <- x28[1]
+
+  last7 <- tail(x28, 7)
+
+  roll_mean_7  <- mean(last7)
+  roll_mean_28 <- mean(x28)
+  roll_med_28  <- median(x28)
+  roll_sd_28   <- sd(x28)
+
+  nz_28 <- sum(x28 > 0)
+  zero_ratio_28 <- 1 - nz_28 / 28
+
+  list(
+    lag_1 = lag_1, lag_2 = lag_2, lag_3 = lag_3,
+    lag_7 = lag_7, lag_14 = lag_14, lag_28 = lag_28,
+    roll_mean_7 = roll_mean_7,
+    roll_mean_28 = roll_mean_28,
+    roll_med_28 = roll_med_28,
+    roll_sd_28 = roll_sd_28,
+    zero_ratio_28 = zero_ratio_28
+  )
+}
+
+# price series to compute price_lag_7
+price_series <- dt[date >= (origin_date - 7) & date <= (origin_date + h),
+                   .(id, date, sell_price_ff)]
+price_series[, id := as.character(id)]
+setorder(price_series, id, date)
+
+setkey(fut, id, date)
+
+for (d in future_dates) {
+
+  todays <- fut[.(unique(fut$id), d), nomatch = 0L]  
+  todays <- merge(todays, buf, by="id", all.x=TRUE)
+
+  # price lag 7 
+  p_lag <- price_series[date == (d - 7), .(id, price_lag_7 = sell_price_ff)]
+  todays <- merge(todays, p_lag, by="id", all.x=TRUE)
+  todays[is.na(price_lag_7), price_lag_7 := sell_price_ff]
+
+  feat_dt <- todays[, {
+    x28 <- sales_buf[[1]]
+    if (length(x28) < 28) x28 <- c(rep(0, 28 - length(x28)), x28)
+
+    rf <- roll_feats(x28)
+
+    price_pct_change_7 <- ifelse(price_lag_7 > 0, (sell_price_ff - price_lag_7) / price_lag_7, 0.0)
+    is_price_drop <- as.integer(price_pct_change_7 < 0)
+    price_rel <- sell_price_ff / price_mean_item
+
+    list(
+      id = id, date = date,
+      wday = wday, month = month, year = year, snap_TX = snap_TX,
+      lag_1 = rf$lag_1, lag_2 = rf$lag_2, lag_3 = rf$lag_3,
+      lag_7 = rf$lag_7, lag_14 = rf$lag_14, lag_28 = rf$lag_28,
+      roll_mean_7 = rf$roll_mean_7,
+      roll_mean_28 = rf$roll_mean_28,
+      roll_med_28 = rf$roll_med_28,
+      roll_sd_28 = rf$roll_sd_28,
+      zero_ratio_28 = rf$zero_ratio_28,
+      sell_price_ff = sell_price_ff,
+      price_rel = price_rel,
+      price_pct_change_7 = price_pct_change_7,
+      is_price_drop = is_price_drop
+    )
+  }, by = id]
+
+  X <- as.matrix(feat_dt[, ..feat_cols])
+  pred_vec <- expm1(predict(m1_tuned, X))
+  pred_vec[pred_vec < 0] <- 0
+
+  pred_dt <- data.table(id = feat_dt$id, date = feat_dt$date, pred = pred_vec)
+  setkey(pred_dt, id, date)
+  fut[pred_dt, pred := i.pred]
+
+  upd <- pred_dt[, .(id, pred)]
+  setkey(upd, id)
+
+  buf <- merge(buf, upd, by="id", all.x=TRUE)
+  buf[, sales_buf := lapply(seq_len(.N), function(i) {
+    x28 <- sales_buf[[i]]
+    if (length(x28) < 28) x28 <- c(rep(0, 28 - length(x28)), x28)
+    c(tail(x28, 27), pred[i])
+  })]
+  buf[, pred := NULL]
+}
+
+# aggregate historic data and forecast
+hist_total <- dt[split %in% c("train","val") & date <= origin_date,
+                 .(total_sales = sum(sales, na.rm=TRUE)), by = date]
+
+fc_total <- fut[, .(total_sales = sum(pred, na.rm=TRUE)), by = date]
+
+hist_total[, series := "Historic Data"]
+fc_total[, series := "Forecast (28 days)"]
+
+plot_dt <- rbindlist(list(hist_total, fc_total), use.names=TRUE, fill=TRUE)
+setorder(plot_dt, date)
+
+ggplot(plot_dt, aes(x = date, y = total_sales, color = series)) +
+  geom_line(linewidth = 0.8) +
+  scale_color_manual(values = c("Historic Data" = "black", "Forecast (28 days)" = "blue")) +
+  labs(
+    title = "Tuned LGBM Forecast (28 days)",
+    x = "Date",
+    y = "Sales",
+    color = ""
+  ) +
+  theme_minimal()
+
+
+```
+
+
