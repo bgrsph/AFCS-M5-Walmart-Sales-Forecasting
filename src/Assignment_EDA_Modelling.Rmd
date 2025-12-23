@@ -7,7 +7,11 @@ header-includes:
 - \fancyfoot[CE] {\thepage}
 title: "Assignment 3"
 subtitle: "Applied Forecasting in Complex Systems 2025"
-author: Bugra Sipahioglu (14318334), Christos Georghiou (16072766), Despoina Delipalla (16324897), Jeremi Wasilewski (14271028)
+author:
+  - "Bugra Sipahioglu (14318334)"
+  - "Christos Georghiou (16072766)"
+  - "Despoina Delipalla (16324897)"
+  - "Jeremi Wasilewski (14271028)"
 date: "University of Amsterdam \n &nbsp;  \n December 23, 2025"
 output: pdf_document
 fontsize: 11pt
@@ -638,6 +642,11 @@ models |>
   gg_tsresiduals() +
   labs(title = "Residual diagnostics: Mean")
 
+models |> 
+  select(Mean) |> 
+  augment() |> features(.innov, ljung_box, lag = 28, dof = 0)
+
+
 models |>
   select(Naive) |>
   gg_tsresiduals() +
@@ -842,8 +851,8 @@ accuracy_ets
 fc_ets_eval <- fit_ets %>%
   forecast(new_data = ts_evaluation, level = c(80, 95))
 
-accuracy_ets <- accuracy(fc_ets_eval, ts_evaluation)
-accuracy_ets
+accuracy_ets_evaluation <- accuracy(fc_ets_eval, ts_evaluation)
+accuracy_ets_evaluation
 ```
 
 ### 3. Resdual diagnostics
@@ -1018,8 +1027,8 @@ y_te_raw <- test_1$target_1
 # compute residuals 
 e_te <- y_te_raw - pred_te
 
-rmse_test <- sqrt(mean(e_te^2, na.rm = TRUE))
-rmse_test
+lgbm_rmse_test <- sqrt(mean(e_te^2, na.rm = TRUE))
+lgbm_rmse_test
 
 
 ```
@@ -1155,15 +1164,6 @@ best_param <- c(base_params, as.list(param_grid[best_idx, ]))
 best_param
 
 ```
-
-Read identified tuned hyperparemeters
-
-```{r, eval = FALSE}
-best_param_df <- read.csv("best_lightgbm_params.csv", stringsAsFactors = FALSE)
-best_param_df <- as.list(best_param_df[1, ])
-
-```
-
 The best model is identified as follows - learning rate: 0.05 - num
 leaves: 64 - feature fraction: 0.9 - bagging fraction: 0.9 -
 min_data_in_leaf: 20
@@ -1179,7 +1179,7 @@ dtrain_tuned <- lgb.Dataset(X_tr, label = y_tr)
 dval_tuned   <- lgb.Dataset(X_va, label = y_va)
 
 m1_tuned <- lgb.train(
-  params  = best_param_df,  
+  params  = best_param,  
   data    = dtrain_tuned,
   nrounds = 5000,         
   valids  = list(train = dtrain_tuned, val = dval_tuned), #BUGRA: "train = dtrain" is added to keep RMSE for train in each interation for fitting graph
@@ -1216,7 +1216,7 @@ accuracy_lgbm_tuned
 
 ```
 
-BUGRA: Extract train and validation loss to observe whether under- or
+Extract train and validation loss to observe whether under- or
 over-fitting occurred.
 
 ```{r}
@@ -1315,14 +1315,60 @@ p_time_tr_tuned / (p_acf_tr_tuned | p_hist_tr_tuned)
 ## Generate table with results of all models
 
 ```{r}
-allresults <- bind_rows(
-  accuracy_baseline,
-  accuracy_arima,
-  accuracy_ets,
-  accuracy_lgbm,
+allresults <- dplyr::bind_rows(
+  accuracy_baseline_evaluation,
+  accuracy_ets_evaluation,
+  accuracy_arima_evaluation,
   accuracy_lgbm_tuned
 )
 
 allresults
 
 ```
+
+
+## Generate aggregated Portmanteau tests for all of the models (table view for convenience)
+```{r}
+ljung_box_results <- dplyr::bind_rows(
+  list(
+    Mean = models |>
+      select(Mean) |>
+      augment() |>
+      features(.innov, ljung_box, lag = 28, dof = 0),
+
+    Naive = models |>
+      select(Naive) |>
+      augment() |>
+      features(.innov, ljung_box, lag = 28, dof = 0),
+
+    Seasonal_naive = models |>
+      select(Seasonal_naive) |>
+      augment() |>
+      features(.innov, ljung_box, lag = 28, dof = 0),
+
+    Drift = models |>
+      select(Drift) |>
+      augment() |>
+      features(.innov, ljung_box, lag = 28, dof = 0),
+
+    ARIMA = fit_arima |>
+      augment() |>
+      features(.innov, ljung_box, lag = 28, dof = 0),
+
+    ETS = fit_ets |>
+      augment() |>
+      features(.innov, ljung_box, lag = 28, dof = 0),
+
+    LightGBM = daily_train_residual_ts |>
+      features(average_residual, ljung_box, lag = 28, dof = 0),
+
+    LightGBM_tuned = daily_train_residual_ts_tuned |>
+      features(average_residual_tuned, ljung_box, lag = 28, dof = 0)
+  ),
+  .id = ".model"
+)
+
+ljung_box_results
+
+```
+
