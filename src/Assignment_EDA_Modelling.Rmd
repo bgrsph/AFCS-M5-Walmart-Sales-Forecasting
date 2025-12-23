@@ -544,7 +544,7 @@ full_dataset %>%
 ### 1. Pre-processing
 
 ```{r}
-# Put all the data into daily time-series format
+# Prepare train, validation and evaluation (test) datasets
 ts_train <- full_dataset %>%
   mutate(date = as.Date(date)) %>%
   group_by(date) %>%
@@ -566,21 +566,18 @@ ts_evaluation <- full_dataset_evaluation %>%
   arrange(date) %>%
   as_tsibble(index = date)
 
-# # Determine the horizon and thus the cutoff value
-forecast_horizon <- nrow(ts_validation)
-
-# cutoff <- max(texas_daily$date) - days(forecast_horizon)
-# 
-# # Split data into train and validation
-# ts_train <- texas_daily %>% filter(date <= cutoff)
-# ts_validation  <- texas_daily %>% filter(date > cutoff)
+# Determine the horizon
+forecast_horizon <- 28
 ```
 
-Check out whether training and validation is set correctly.
+Check out whether training, validation and evaluation datasets are set
+correctly.
 
 ```{r}
+# Print out the range values to check the continuity of the dates
 range(ts_train$date)
 range(ts_validation$date)
+range(ts_evaluation$date)
 ```
 
 ### 2. Fit the model
@@ -591,7 +588,7 @@ seasonal naive should produce the lowest RMSE. We'll use seasonal naive
 in the report as a baseline.
 
 ```{r}
-# Fit the baseline models
+# Fit the baseline models using training data
 models <- ts_train %>%
   model(
     Mean          = MEAN(sales),
@@ -601,35 +598,41 @@ models <- ts_train %>%
   )
 ```
 
-### 3. Forecast and report the results
+### 3.1 Forecast and report the results for validation dataset
 
 ```{r}
 # Forecast and report 80% & 90% prediction intervals
-fc_baseline <- models %>% forecast(h = forecast_horizon, level = c(80, 95))
+fc_baseline_validation <- models %>% forecast(h = forecast_horizon, level = c(80, 95))
 
-# Calculate accuracy for the validation predictions
-accuracy_baseline <- accuracy(fc_baseline, ts_validation)
-accuracy_baseline
+# Calculate accuracy for the evaluation predictions
+accuracy_baseline_validation <- accuracy(fc_baseline_validation, ts_validation)
+accuracy_baseline_validation
 
 # Plot the data and predictions
 autoplot(ts_train, sales) +
-  autolayer(fc_baseline) +
+  autolayer(fc_baseline_validation) +
   labs(title = "Baseline Forecasts (28 days)", x = "Date", y = "Sales")
-``` 
-### Evaluation
-```{r}
-fc_ets_eval <- fit_ets %>%
-  forecast(new_data = ts_evaluation, level = c(80, 95))
-
-accuracy_ets <- accuracy(fc_ets_eval, ts_evaluation)
-accuracy_ets
 ```
 
-
-### 5. Diagnostics (if needed but I don't think so since these are baselines)
+### 3.2 Forecast and report the results for evaluation dataset
 
 ```{r}
+# Forecast and report 80% & 90% prediction intervals
+fc_baseline_evaluation <- models %>% forecast(new_data = ts_evaluation, level = c(80, 95))
 
+# Calculate accuracy for the evaluation predictions
+accuracy_baseline_evaluation <- accuracy(fc_baseline_evaluation, ts_evaluation)
+accuracy_baseline_evaluation
+
+# Plot the data and predictions
+autoplot(ts_train, sales) +
+  autolayer(fc_baseline_evaluation) +
+  labs(title = "Baseline Forecasts (28 days)", x = "Date", y = "Sales")
+```
+
+### 5. Diagnostics
+
+```{r}
 models |>
   select(Mean) |>
   gg_tsresiduals() +
@@ -655,8 +658,8 @@ models |>
 
 ### 1. Pre-processing
 
-No fundamental pre-processing is needed as the dataset that's used in
-seasonal naive (i.e., texas_daily) is sufficient for ARIMA modelling.
+No fundamental pre-processing is needed as the datasets that are used in
+seasonal naive are sufficient for ARIMA modelling.
 
 ```{r}
 # No fundamental preprocessing is needed compared to dataset that's used
@@ -675,6 +678,7 @@ transformation is needed here.
 ### 2. Fit the model and report the (automatically) chosen model
 
 ```{r}
+# fit the model
 fit_arima <- ts_train %>%
   model(arima = ARIMA(sales))
 
@@ -682,22 +686,47 @@ fit_arima <- ts_train %>%
 report(fit_arima)
 ```
 
-### 3. Forecast and report the results
+### 3.1 Forecast and report the results for validation dataset
 
 ```{r}
 # Forecast and report 80% & 90% prediction intervals
-fc_arima <- fit_arima %>%
+fc_arima_validation <- fit_arima %>%
   forecast(h = forecast_horizon, level = c(80, 95))
 
 
 # Calculate accuracy for the validation predictions
-accuracy_arima <- accuracy(fc_arima, ts_validation)
-accuracy_arima
+accuracy_arima_validation <- accuracy(fc_arima_validation, ts_validation)
+accuracy_arima_validation
 
 # Plot the predictions
 autoplot(ts_train, sales) +
-  autolayer(fc_arima) +
+  autolayer(fc_arima_validation) +
   labs(title = "ARIMA Forecast (28 days)", x = "Date", y = "Sales")
+```
+
+### 3.2 Forecast and report the results for evaluation dataset
+
+Here, since ARIMA model must start one step beyond the end of the
+training data and the evaluation datasets starts 28 days after training,
+forecasting is done for 56 days.
+
+```{r}
+# Calculate the total number of forecasting horizon needed for ARIMA
+forecast_horizon_arima_evaluation <- nrow(ts_validation) + nrow(ts_evaluation) 
+
+# Forecast and report 80% & 90% prediction intervals
+fc_arima_evaluation <- fit_arima %>%
+  forecast(h = forecast_horizon_arima_evaluation , level = c(80, 95))
+
+# Calculate accuracy for the validation predictions
+accuracy_arima_evaluation <- accuracy(fc_arima_evaluation, ts_evaluation)
+accuracy_arima_evaluation
+
+# Plot the predictions
+autoplot(ts_train, sales) +
+  autolayer(fc_arima_evaluation) +
+  labs(title = "ARIMA Forecast (28 days)", x = "Date", y = "Sales")
+
 ```
 
 ### 4. Residual Diagnostics
@@ -808,6 +837,7 @@ accuracy_ets
 ```
 
 ### Evaluation on test set
+
 ```{r}
 fc_ets_eval <- fit_ets %>%
   forecast(new_data = ts_evaluation, level = c(80, 95))
